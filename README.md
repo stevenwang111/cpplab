@@ -22,12 +22,10 @@
 
 ## 快速开始
 
-环境要求：Linux（已在 WSL2 / Ubuntu 26.04 验证）、Node.js ≥ 22.5（推荐 24）、可用的
-`sudo`。`node:sqlite` 从 Node 22.5 起内置，项目不使用原生扩展。
+环境要求：Linux、Node.js ≥ 22.5（推荐 24）、可用的 `sudo`。`node:sqlite` 从 Node 22.5
+起内置，项目不使用原生扩展。已在 WSL2 / Ubuntu 26.04 验证通过。
 
 ```bash
-cd /home/steven/online_cpp_ide
-
 npm install                 # 首次安装依赖
 npm run sandbox:setup       # 安装 clang / lldb / clang-format / dumb-init，构建并安装 nsjail，创建设备节点（会调用 sudo）
 npm run build               # 构建前端到 dist/client，后端到 dist/server.js
@@ -41,8 +39,8 @@ npm run dev                 # 前端 http://127.0.0.1:5173，API/WS 代理到 30
 ```
 
 > `sandbox:setup` 会把 `nsjail` 安装为 `4755`（setuid root），并创建 4 个设备节点到
-> `data/sandbox/dev/`。这是本机单用户/内网场景的简化；如果机器上还有其他不受信任的本地用户，
-> 建议改为由 root 启动后端，并把 nsjail 恢复为普通权限。详见“安全说明”。
+> `data/sandbox/dev/`。这是单机单用户/内网场景的简化；如果宿主机上还有其他不受信任的本地用户，
+> 建议改为由 root 启动后端，并把 nsjail 恢复为普通权限。详见“安全说明与环境差异”。
 
 ### 环境变量
 
@@ -117,7 +115,7 @@ src/client：
 
 ## 安全模型
 
-设计文档 §5.5 的 7 条底线在本实现中的落点：
+[`AGENTS.md`](AGENTS.md) §3「安全底线清单」的 7 条底线在本实现中的落点：
 
 1. **编译也在沙箱内**：`compileWorkspace` 与运行走同一套 nsjail 启动器，使用编译专用 cgroup 配额。
 2. **编译参数白名单**：只允许 `-g/-Wall/-Wextra/-Werror/-pthread/-lm/-D/-I/` 指定 sanitizer；
@@ -127,8 +125,8 @@ src/client：
    避免 pid namespace 里的 init 残留。
 5. **无网络**：nsjail 默认创建新 network namespace；没有接口、没有路由。
 6. **只读 rootfs + 独立工作区**：`/usr` 只读 bind，`/workspace` 是每次任务新建的目录，
-   jail 内 `/tmp`、`/dev/shm` 是 tmpfs；根文件系统目录权限为 0555。`WORK_ROOT` 建议放在 tmpfs，
-   本机 `/tmp` 即为 tmpfs。
+   jail 内 `/tmp`、`/dev/shm` 是 tmpfs；根文件系统目录权限为 0555。`WORK_ROOT` 建议放在
+   tmpfs 上，使容量上限由内核直接强制。
 7. **no-new-privs + 非 root**：nsjail 默认 `no_new_privs`，jail 内 uid/gid = 10000，capabilities 丢弃；`dumb-init` 作为 PID 1 转发信号。
 
 其他措施：
@@ -142,7 +140,7 @@ src/client：
 
 ### 安全说明与环境差异
 
-本项目按既定设计实现，以下是为当前 WSL2 环境/本地工具链做的适配，均已在代码注释中说明：
+本项目按既定设计实现，以下是为适配特定内核版本与本地工具链所做的取舍，均已在代码注释中说明：
 
 | 设计 | 实现 | 原因 |
 |---|---|---|
@@ -155,7 +153,7 @@ src/client：
 其他限制：
 
 - 单用户/内网使用，**没有登录与权限系统**。默认只监听 `127.0.0.1`；不要直接暴露到公网。
-- setuid nsjail 意味着本机任意用户都能执行 nsjail；多用户宿主建议由 root 运行后端。
+- setuid nsjail 意味着宿主机上的任意本地用户都能执行 nsjail；多用户宿主建议由 root 运行后端。
 - 运行工作区位于宿主 `WORK_ROOT`。如果它不是 tmpfs，`fsize`、任务生命周期与清理仍会约束磁盘，
   但不像真正的 per-task tmpfs 那样由内核强制容量上限。
 - 调试 MVP **不支持交互式 stdin**。读取 `std::cin` 的程序调试时会等待输入，请先用“输入”面板
