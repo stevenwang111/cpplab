@@ -6,8 +6,9 @@ import type {
   DebugStartResponse,
   Diagnostic,
 } from '../../shared/types.js';
+import { translate, type Locale } from '../../shared/i18n/index.js';
 import { config } from '../config.js';
-import { ApiError, SandboxUnavailableError } from '../util/errors.js';
+import { ApiError, SandboxUnavailableError, msg, raw } from '../util/errors.js';
 import { Semaphore } from '../util/semaphore.js';
 import { compileSemaphore } from '../util/semaphores.js';
 import { compileWorkspace, type CompileInput } from '../compile/runner.js';
@@ -30,6 +31,8 @@ export interface DebugStartInput {
   compiler: CompileInput['compiler'];
   std: CompileInput['std'];
   extraFlags: string[];
+  /** UI language captured when the session was requested. */
+  locale: Locale;
 }
 
 export interface DebugStartResult {
@@ -99,13 +102,15 @@ class DebugSession {
   constructor(
     readonly id: string,
     readonly workdir: string,
+    /** Messages shown to this session's client, in its UI language. */
+    readonly locale: Locale,
     handle: DebugSandboxHandle,
     release: () => void,
   ) {
     this.handle = handle;
     this.release = release;
-    this.idleTimer = setTimeout(() => this.expire('空闲超时（5 分钟无操作）'), config.limits.debugIdleTimeoutMs);
-    this.hardTimer = setTimeout(() => this.expire('会话超过 30 分钟上限'), config.limits.debugHardTimeoutMs);
+    this.idleTimer = setTimeout(() => this.expire(this.say('dbg.idleTimeout')), config.limits.debugIdleTimeoutMs);
+    this.hardTimer = setTimeout(() => this.expire(this.say('dbg.hardTimeout')), config.limits.debugHardTimeoutMs);
     this.idleTimer.unref();
     this.hardTimer.unref();
 
@@ -116,6 +121,10 @@ class DebugSession {
     handle.child.once('error', this.onExit);
 
     createDebugSessionRow(this.id, handle.child.pid ?? null);
+  }
+
+  say(key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]): string {
+    return translate(this.locale, key, params);
   }
 
   attach(socket: WebSocket): void {
@@ -147,17 +156,17 @@ class DebugSession {
       try {
         parsed = JSON.parse(text);
       } catch {
-        this.sendConsole('客户端发送了非法 JSON');
+        this.sendConsole(this.say('dbg.clientBadJson'));
         return;
       }
       this.writeToAdapter(parsed);
     });
     socket.on('close', () => {
       if (this.socket === socket) this.socket = undefined;
-      void this.terminate('客户端断开');
+      void this.terminate(this.say('dbg.clientClosed'));
     });
     socket.on('error', () => {
-      void this.terminate('客户端连接错误');
+      void this.terminate(this.say('dbg.clientError'));
     });
   }
 
@@ -179,7 +188,7 @@ class DebugSession {
       child.stdin.write(frameDap(message));
       this.touch();
     } catch {
-      this.sendConsole('调试适配器的输入管道已关闭');
+      this.sendConsole(this.say('dbg.adapterStdinClosed'));
     }
   }
 
@@ -199,8 +208,8 @@ class DebugSession {
           this.programOutputBytes += Buffer.byteLength(body.output ?? '');
           if (this.programOutputBytes > config.limits.maxOutputBytes) {
             this.outputLimitHit = true;
-            this.sendConsole('程序输出超过 64 KiB，调试会话已终止');
-            void this.terminate('程序输出超过上限');
+            this.sendConsole(this.say('dbg.outputLimit', { limit: '64 KiB' }));
+            void this.terminate(this.say('dbg.outputLimitReason'));
             return;
           }
         }
@@ -229,7 +238,7 @@ class DebugSession {
 
   private handleExit(): void {
     if (this.ended) return;
-    this.sendConsole('调试适配器已退出');
+    this.sendConsole(this.say('dbg.adapterExited'));
     if (this.socket && this.socket.readyState === 1) {
       this.socket.send(JSON.stringify({ seq: 0, type: 'event', event: 'terminated', body: {} }));
       this.socket.close(1000, 'debug adapter exited');
@@ -307,7 +316,7 @@ const sessions = new Map<string, DebugSession>();
 
 export async function startDebugSession(input: DebugStartInput): Promise<DebugStartOutcome> {
   if (!config.tools.lldbDap) {
-    throw new ApiError(503, 'DEBUGGER_UNAVAILABLE', 'lldb-dap 未安装');
+    throw new ApiError(503, 'DEBUGGER_UNAVAILABLE', msg('err.debuggerMissing'));
   }
   const release = await debugSemaphore.acquire();
   let workdir: string | undefined;
@@ -323,6 +332,7 @@ export async function startDebugSession(input: DebugStartInput): Promise<DebugSt
         opt: '-O0',
         extraFlags: input.extraFlags,
         debug: true,
+        locale: input.locale,
       });
     } finally {
       releaseCompile();
@@ -336,7 +346,7 @@ export async function startDebugSession(input: DebugStartInput): Promise<DebugSt
 
     const handle = startDebugSandbox(compile.workdir, withInit([config.tools.lldbDap]));
     const id = newId();
-    const session = new DebugSession(id, compile.workdir, handle, release);
+    const session = new DebugSession(id, compile.workdir, input.locale, handle, release);
     sessions.set(id, session);
     return {
       ok: true,
@@ -353,7 +363,7 @@ export async function startDebugSession(input: DebugStartInput): Promise<DebugSt
     release();
     if (workdir) cleanupWorkdir(workdir);
     if (error instanceof SandboxUnavailableError || error instanceof ApiError) throw error;
-    throw new ApiError(500, 'DEBUG_START_FAILED', '启动调试会话失败', String(error));
+    throw new ApiError(500, 'DEBUG_START_FAILED', msg('err.debugStartFailed'), raw(String(error)));
   }
 }
 
@@ -364,7 +374,7 @@ export function getDebugSession(id: string): DebugSession | undefined {
 export async function stopDebugSession(id: string): Promise<boolean> {
   const session = sessions.get(id);
   if (!session) return false;
-  await session.terminate('会话已停止');
+  await session.terminate(session.say('dbg.sessionStopped'));
   return true;
 }
 
@@ -373,6 +383,7 @@ export function listDebugSessions(): DebugSessionSummary[] {
 }
 
 export async function shutdownDebugSessions(): Promise<void> {
-  await Promise.all([...sessions.values()].map((session) => session.terminate('服务器关闭')));
+  await Promise.all(
+    [...sessions.values()].map((session) => session.terminate(session.say('dbg.serverShutdown'))),
+  );
 }
-

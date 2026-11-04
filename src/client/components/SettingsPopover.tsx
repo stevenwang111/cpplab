@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Check, Minus, Plus } from 'lucide-react';
+import { t, useLocale, setLocale, LANGUAGE_OPTIONS, type Locale } from '../i18n';
 import type { EditorSettings } from './CodeEditor';
 
 interface SettingsPopoverProps {
@@ -13,6 +14,7 @@ interface SettingsPopoverProps {
 }
 
 export function SettingsPopover(props: SettingsPopoverProps): JSX.Element {
+  const locale = useLocale();
   const [name, setName] = useState(props.projectName);
   const [renaming, setRenaming] = useState(false);
 
@@ -34,22 +36,37 @@ export function SettingsPopover(props: SettingsPopoverProps): JSX.Element {
 
   return (
     <div className="popover-layer">
-      <button type="button" className="popover-backdrop" aria-label="关闭设置" onClick={props.onClose} />
-      <div className="settings-popover" role="dialog" aria-label="编辑器设置">
+      <button type="button" className="popover-backdrop" aria-label={t('dialogs.settings.backdrop')} onClick={props.onClose} />
+      <div className="settings-popover" role="dialog" aria-label={t('dialogs.settings.title')}>
         <div className="popover-head">
-          <span>编辑器设置</span>
-          <button type="button" className="icon-btn tiny" onClick={props.onClose} title="关闭">
+          <span>{t('dialogs.settings.title')}</span>
+          <button type="button" className="icon-btn tiny" onClick={props.onClose} title={t('common.close')}>
             <Minus size={14} />
           </button>
         </div>
 
         <div className="setting-row">
-          <span className="setting-label">字体大小</span>
+          <span className="setting-label">{t('dialogs.settings.language')}</span>
+          <select
+            value={locale}
+            onChange={(event) => setLocale(event.target.value as Locale)}
+            aria-label={t('dialogs.settings.language')}
+          >
+            {LANGUAGE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="setting-row">
+          <span className="setting-label">{t('dialogs.settings.fontSize')}</span>
           <div className="stepper">
             <button
               type="button"
               onClick={() => update({ fontSize: Math.max(11, props.settings.fontSize - 1) })}
-              title="减小"
+              title={t('dialogs.settings.decrease')}
             >
               <Minus size={12} />
             </button>
@@ -57,7 +74,7 @@ export function SettingsPopover(props: SettingsPopoverProps): JSX.Element {
             <button
               type="button"
               onClick={() => update({ fontSize: Math.min(20, props.settings.fontSize + 1) })}
-              title="增大"
+              title={t('dialogs.settings.increase')}
             >
               <Plus size={12} />
             </button>
@@ -65,7 +82,7 @@ export function SettingsPopover(props: SettingsPopoverProps): JSX.Element {
         </div>
 
         <label className="setting-row clickable">
-          <span className="setting-label">显示 minimap</span>
+          <span className="setting-label">{t('dialogs.settings.minimap')}</span>
           <input
             type="checkbox"
             checked={props.settings.minimap}
@@ -74,7 +91,7 @@ export function SettingsPopover(props: SettingsPopoverProps): JSX.Element {
         </label>
 
         <label className="setting-row clickable">
-          <span className="setting-label">自动换行</span>
+          <span className="setting-label">{t('dialogs.settings.wordWrap')}</span>
           <input
             type="checkbox"
             checked={props.settings.wordWrap === 'on'}
@@ -85,20 +102,20 @@ export function SettingsPopover(props: SettingsPopoverProps): JSX.Element {
         <div className="setting-divider" />
 
         <div className="setting-row">
-          <span className="setting-label">运行时限</span>
+          <span className="setting-label">{t('dialogs.settings.timeLimit')}</span>
           <select
             value={props.runLimits.timeMs}
             onChange={(event) => props.onRunLimitsChange({ ...props.runLimits, timeMs: Number(event.target.value) })}
           >
-            <option value={1000}>1 秒</option>
-            <option value={2000}>2 秒</option>
-            <option value={5000}>5 秒</option>
-            <option value={10000}>10 秒</option>
+            <option value={1000}>{t('dialogs.settings.seconds', { n: 1 })}</option>
+            <option value={2000}>{t('dialogs.settings.seconds', { n: 2 })}</option>
+            <option value={5000}>{t('dialogs.settings.seconds', { n: 5 })}</option>
+            <option value={10000}>{t('dialogs.settings.seconds', { n: 10 })}</option>
           </select>
         </div>
 
         <div className="setting-row">
-          <span className="setting-label">内存上限</span>
+          <span className="setting-label">{t('dialogs.settings.memoryLimit')}</span>
           <select
             value={props.runLimits.memoryMb}
             onChange={(event) => props.onRunLimitsChange({ ...props.runLimits, memoryMb: Number(event.target.value) })}
@@ -112,13 +129,13 @@ export function SettingsPopover(props: SettingsPopoverProps): JSX.Element {
         <div className="setting-divider" />
 
         <div className="setting-block">
-          <span className="setting-label">项目名称</span>
+          <span className="setting-label">{t('dialogs.settings.projectName')}</span>
           <div className="rename-row">
             <input
               value={name}
               maxLength={60}
               onChange={(event) => setName(event.target.value)}
-              placeholder="项目名称"
+              placeholder={t('dialogs.settings.projectName')}
             />
             <button
               type="button"
@@ -131,12 +148,12 @@ export function SettingsPopover(props: SettingsPopoverProps): JSX.Element {
                   .finally(() => setRenaming(false));
               }}
             >
-              <Check size={13} /> 保存
+              <Check size={13} /> {t('common.save')}
             </button>
           </div>
         </div>
 
-        <p className="setting-note">设置保存在浏览器本地；项目名保存到 SQLite。</p>
+        <p className="setting-note">{t('dialogs.settings.note')}</p>
       </div>
     </div>
   );

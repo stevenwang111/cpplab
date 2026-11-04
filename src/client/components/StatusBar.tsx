@@ -2,6 +2,7 @@ import { Circle, GitBranch, ShieldCheck, WifiOff } from 'lucide-react';
 import type { Capabilities, CompilerId, RunPhase, RunResult, StdId } from '../../shared/types';
 import type { DebugState } from '../debug/dapClient';
 import { formatDuration, formatMemory, statusClass, statusLabel } from '../utils/format';
+import { t, useLocale } from '../i18n';
 
 interface StatusBarProps {
   activeFile: string;
@@ -15,15 +16,16 @@ interface StatusBarProps {
   debugState: DebugState;
 }
 
-const DEBUG_LABEL: Record<DebugState, string> = {
-  idle: '调试未启动',
-  starting: '调试启动中',
-  running: '调试运行中',
-  paused: '调试已暂停',
-  terminated: '调试已结束',
-};
+const DEBUG_LABEL = {
+  idle: 'chrome.statusbar.debug.idle',
+  starting: 'chrome.statusbar.debug.starting',
+  running: 'chrome.statusbar.debug.running',
+  paused: 'chrome.statusbar.debug.paused',
+  terminated: 'chrome.statusbar.debug.terminated',
+} as const;
 
 export function StatusBar(props: StatusBarProps): JSX.Element {
+  useLocale();
   const sandboxReady = props.capabilities.sandbox.available;
   return (
     <footer className="statusbar">
@@ -35,16 +37,16 @@ export function StatusBar(props: StatusBarProps): JSX.Element {
         <span className="status-item">
           Ln {props.cursor.line}, Col {props.cursor.column}
         </span>
-        <span className="status-item">空格: 4</span>
+        <span className="status-item">{t('chrome.statusbar.indent')}</span>
         <span className="status-item">UTF-8</span>
       </div>
       <div className="statusbar-right">
         <span className={`status-item ${sandboxReady ? 'ok' : 'warn'}`} title={props.capabilities.sandbox.detail}>
-          <ShieldCheck size={12} /> nsjail 隔离
+          <ShieldCheck size={12} /> {t('chrome.statusbar.sandbox')}
           <Circle size={6} fill="currentColor" strokeWidth={0} />
         </span>
         <span className="status-item">
-          <WifiOff size={12} /> 无网络
+          <WifiOff size={12} /> {t('chrome.statusbar.offline')}
         </span>
         <span className="status-item">{props.compiler}</span>
         <span className="status-item">{props.std.toUpperCase()}</span>
@@ -53,7 +55,7 @@ export function StatusBar(props: StatusBarProps): JSX.Element {
             {statusLabel(props.runResult.status)} · {formatDuration(props.runResult.timeMs)} · {formatMemory(props.runResult.memoryKb)}
           </span>
         )}
-        <span className="status-item">{DEBUG_LABEL[props.debugState]}</span>
+        <span className="status-item">{t(DEBUG_LABEL[props.debugState])}</span>
         <span className="status-item muted">CppLab v1.0</span>
       </div>
     </footer>

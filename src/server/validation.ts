@@ -17,7 +17,7 @@ import {
   type RunRequest,
   type StdId,
 } from '../shared/types.js';
-import { ApiError } from './util/errors.js';
+import { ApiError, msg } from './util/errors.js';
 import { sanitizeExtraFlags } from './compile/flags.js';
 import { config } from './config.js';
 
@@ -25,17 +25,17 @@ const PATH_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_.\-/]*$/;
 
 export function normalizeFilePath(raw: unknown): string {
   if (typeof raw !== 'string') {
-    throw new ApiError(400, 'INVALID_PATH', '文件路径必须是字符串');
+    throw new ApiError(400, 'INVALID_PATH', msg('err.pathMustBeString'));
   }
   const value = raw.trim();
   if (!value || value.length > 160) {
-    throw new ApiError(400, 'INVALID_PATH', '文件路径长度不合法');
+    throw new ApiError(400, 'INVALID_PATH', msg('err.pathLengthInvalid'));
   }
   if (value.startsWith('/') || value.includes('\\') || value.includes('\0')) {
-    throw new ApiError(400, 'INVALID_PATH', `非法文件路径：${value}`);
+    throw new ApiError(400, 'INVALID_PATH', msg('err.pathInvalid', { path: value }));
   }
   if (!PATH_PATTERN.test(value)) {
-    throw new ApiError(400, 'INVALID_PATH', `文件路径只能包含字母、数字、下划线、点和斜杠：${value}`);
+    throw new ApiError(400, 'INVALID_PATH', msg('err.pathCharset', { path: value }));
   }
   const normalized = path.posix.normalize(value);
   if (
@@ -46,7 +46,7 @@ export function normalizeFilePath(raw: unknown): string {
     normalized.endsWith('/') ||
     normalized.split('/').some((part) => part === '' || part === '.' || part === '..' || part.length > 80)
   ) {
-    throw new ApiError(400, 'INVALID_PATH', `非法文件路径：${value}`);
+    throw new ApiError(400, 'INVALID_PATH', msg('err.pathInvalid', { path: value }));
   }
   return normalized;
 }
@@ -60,14 +60,14 @@ export interface ValidatedFiles {
 
 export function validateFiles(filesInput: unknown, entryInput: unknown): ValidatedFiles {
   if (!filesInput || typeof filesInput !== 'object' || Array.isArray(filesInput)) {
-    throw new ApiError(400, 'INVALID_FILES', 'files 必须是对象');
+    throw new ApiError(400, 'INVALID_FILES', msg('err.filesNotObject'));
   }
   const entries = Object.entries(filesInput as Record<string, unknown>);
   if (entries.length === 0) {
-    throw new ApiError(400, 'INVALID_FILES', '至少需要一个源文件');
+    throw new ApiError(400, 'INVALID_FILES', msg('err.filesEmpty'));
   }
   if (entries.length > MAX_FILES) {
-    throw new ApiError(400, 'TOO_MANY_FILES', `文件数量不能超过 ${MAX_FILES} 个`);
+    throw new ApiError(400, 'TOO_MANY_FILES', msg('err.tooManyFiles', { max: MAX_FILES }));
   }
 
   const map: Record<string, string> = Object.create(null) as Record<string, string>;
@@ -77,18 +77,18 @@ export function validateFiles(filesInput: unknown, entryInput: unknown): Validat
   for (const [rawPath, content] of entries) {
     const filePath = normalizeFilePath(rawPath);
     if (typeof content !== 'string') {
-      throw new ApiError(400, 'INVALID_FILES', `文件内容必须是字符串：${filePath}`);
+      throw new ApiError(400, 'INVALID_FILES', msg('err.fileContentNotString', { path: filePath }));
     }
     if (map[filePath] !== undefined) {
-      throw new ApiError(400, 'INVALID_FILES', `文件路径重复：${filePath}`);
+      throw new ApiError(400, 'INVALID_FILES', msg('err.filePathDuplicate', { path: filePath }));
     }
     const bytes = Buffer.byteLength(content);
     sourceBytes += bytes;
     if (bytes > MAX_SOURCE_BYTES) {
-      throw new ApiError(400, 'SOURCE_TOO_LARGE', `单个文件不能超过 ${MAX_SOURCE_BYTES / 1024} KiB`);
+      throw new ApiError(400, 'SOURCE_TOO_LARGE', msg('err.sourceFileTooLarge', { kb: MAX_SOURCE_BYTES / 1024 }));
     }
     if (sourceBytes > MAX_SOURCE_BYTES) {
-      throw new ApiError(400, 'SOURCE_TOO_LARGE', `源码总大小不能超过 ${MAX_SOURCE_BYTES / 1024} KiB`);
+      throw new ApiError(400, 'SOURCE_TOO_LARGE', msg('err.sourceTotalTooLarge', { kb: MAX_SOURCE_BYTES / 1024 }));
     }
     map[filePath] = content;
     files.push({ path: filePath, content });
@@ -96,7 +96,7 @@ export function validateFiles(filesInput: unknown, entryInput: unknown): Validat
 
   const entry = normalizeFilePath(entryInput);
   if (map[entry] === undefined) {
-    throw new ApiError(400, 'ENTRY_MISSING', `入口文件不存在：${entry}`);
+    throw new ApiError(400, 'ENTRY_MISSING', msg('err.entryMissing', { entry }));
   }
 
   return { files, map, entry, sourceBytes };
@@ -105,7 +105,7 @@ export function validateFiles(filesInput: unknown, entryInput: unknown): Validat
 function enumValue<T extends string>(value: unknown, allowed: readonly T[], field: string, fallback: T): T {
   if (value === undefined) return fallback;
   if (typeof value !== 'string' || !(allowed as readonly string[]).includes(value)) {
-    throw new ApiError(400, 'INVALID_REQUEST', `${field} 取值不合法`);
+    throw new ApiError(400, 'INVALID_REQUEST', msg('err.enumInvalid', { field }));
   }
   return value as T;
 }
@@ -136,7 +136,7 @@ export interface ValidatedRun {
 
 export function validateRunRequest(body: unknown): ValidatedRun {
   if (!body || typeof body !== 'object') {
-    throw new ApiError(400, 'INVALID_REQUEST', '请求体必须是 JSON 对象');
+    throw new ApiError(400, 'INVALID_REQUEST', msg('err.bodyNotJson'));
   }
   const input = body as Partial<RunRequest>;
   const files = validateFiles(input.files, input.entry);
@@ -146,7 +146,7 @@ export function validateRunRequest(body: unknown): ValidatedRun {
   const extraFlags = sanitizeExtraFlags(input.extraFlags);
   const stdin = typeof input.stdin === 'string' ? input.stdin : '';
   if (Buffer.byteLength(stdin) > MAX_STDIN_BYTES) {
-    throw new ApiError(413, 'STDIN_TOO_LARGE', `标准输入不能超过 ${MAX_STDIN_BYTES / 1024} KiB`);
+    throw new ApiError(413, 'STDIN_TOO_LARGE', msg('err.stdinTooLarge', { kb: MAX_STDIN_BYTES / 1024 }));
   }
   return { files, compiler, std, opt, extraFlags, stdin, limits: normalizeLimits(input.limits) };
 }
@@ -160,7 +160,7 @@ export interface ValidatedDebugStart {
 
 export function validateDebugStart(body: unknown): ValidatedDebugStart {
   if (!body || typeof body !== 'object') {
-    throw new ApiError(400, 'INVALID_REQUEST', '请求体必须是 JSON 对象');
+    throw new ApiError(400, 'INVALID_REQUEST', msg('err.bodyNotJson'));
   }
   const input = body as Partial<DebugStartRequest>;
   const files = validateFiles(input.files, input.entry);
@@ -171,15 +171,15 @@ export function validateDebugStart(body: unknown): ValidatedDebugStart {
 
 export function validateFormatRequest(body: unknown): { file: string; content: string } {
   if (!body || typeof body !== 'object') {
-    throw new ApiError(400, 'INVALID_REQUEST', '请求体必须是 JSON 对象');
+    throw new ApiError(400, 'INVALID_REQUEST', msg('err.bodyNotJson'));
   }
   const input = body as { file?: unknown; content?: unknown };
   const file = normalizeFilePath(input.file);
   if (typeof input.content !== 'string') {
-    throw new ApiError(400, 'INVALID_REQUEST', 'content 必须是字符串');
+    throw new ApiError(400, 'INVALID_REQUEST', msg('err.contentNotString'));
   }
   if (Buffer.byteLength(input.content) > MAX_SOURCE_BYTES) {
-    throw new ApiError(413, 'SOURCE_TOO_LARGE', '源码过大');
+    throw new ApiError(413, 'SOURCE_TOO_LARGE', msg('err.sourceTooLarge'));
   }
   return { file, content: input.content };
 }

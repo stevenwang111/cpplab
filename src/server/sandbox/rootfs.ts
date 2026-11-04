@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { localized, type LocalizedText } from '../../shared/i18n/index.js';
 import { config } from '../config.js';
 
 const DEVICE_NAMES = ['null', 'zero', 'urandom', 'random'] as const;
@@ -104,7 +105,8 @@ function writeIfDifferent(filePath: string, content: string): void {
 export interface DeviceStatus {
   ready: boolean;
   missing: string[];
-  detail: string;
+  /** Rendered per request locale by the capability layer. */
+  detail: LocalizedText;
 }
 
 /**
@@ -126,11 +128,11 @@ export function checkDevices(): DeviceStatus {
     }
   }
   if (missing.length === 0) {
-    return { ready: true, missing, detail: '设备节点就绪' };
+    return { ready: true, missing, detail: localized('caps.devicesReady') };
   }
   return {
     ready: false,
     missing,
-    detail: `缺少设备节点 ${missing.join(', ')}；请运行 npm run sandbox:setup`,
+    detail: localized('caps.devicesMissing', { list: missing.join(', ') }),
   };
 }

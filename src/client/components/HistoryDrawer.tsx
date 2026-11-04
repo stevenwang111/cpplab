@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Clock3, Loader2, RefreshCw, RotateCcw, X } from 'lucide-react';
 import type { RunDetail, RunSummary } from '../../shared/types';
 import { api } from '../api';
+import { t, useLocale } from '../i18n';
 import { formatDuration, formatMemory, formatRelative, statusClass, statusLabel } from '../utils/format';
 
 interface HistoryDrawerProps {
@@ -14,6 +15,7 @@ interface HistoryDrawerProps {
 }
 
 export function HistoryDrawer(props: HistoryDrawerProps): JSX.Element | null {
+  useLocale();
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
@@ -25,7 +27,7 @@ export function HistoryDrawer(props: HistoryDrawerProps): JSX.Element | null {
       const response = await api.runs(60);
       setRuns(response.runs);
     } catch (error) {
-      props.pushToast('error', error instanceof Error ? error.message : '加载运行记录失败');
+      props.pushToast('error', error instanceof Error ? error.message : t('panels.history.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -54,7 +56,7 @@ export function HistoryDrawer(props: HistoryDrawerProps): JSX.Element | null {
       const detail = await api.runDetail(run.id);
       props.onViewRun(detail.run);
     } catch (error) {
-      props.pushToast('error', error instanceof Error ? error.message : '读取记录失败');
+      props.pushToast('error', error instanceof Error ? error.message : t('panels.history.readFailed'));
     }
   };
 
@@ -63,9 +65,9 @@ export function HistoryDrawer(props: HistoryDrawerProps): JSX.Element | null {
     try {
       await api.restoreRun(run.id);
       props.onRestored();
-      props.pushToast('success', '已恢复该次运行的代码快照');
+      props.pushToast('success', t('panels.history.restored'));
     } catch (error) {
-      props.pushToast('error', error instanceof Error ? error.message : '恢复失败');
+      props.pushToast('error', error instanceof Error ? error.message : t('panels.history.restoreFailed'));
     } finally {
       setRestoring(null);
     }
@@ -73,18 +75,18 @@ export function HistoryDrawer(props: HistoryDrawerProps): JSX.Element | null {
 
   return (
     <div className="drawer-layer">
-      <button type="button" className="drawer-backdrop" aria-label="关闭运行记录" onClick={props.onClose} />
+      <button type="button" className="drawer-backdrop" aria-label={t('panels.history.closeAria')} onClick={props.onClose} />
       <aside className="history-drawer">
         <div className="drawer-header">
           <div>
-            <span className="drawer-title">运行记录</span>
-            <span className="drawer-subtitle">最近的运行与调试快照</span>
+            <span className="drawer-title">{t('panels.history.title')}</span>
+            <span className="drawer-subtitle">{t('panels.history.subtitle')}</span>
           </div>
           <div className="drawer-actions">
-            <button type="button" className="icon-btn small" onClick={() => void load()} title="刷新">
+            <button type="button" className="icon-btn small" onClick={() => void load()} title={t('common.refresh')}>
               {loading ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}
             </button>
-            <button type="button" className="icon-btn small" onClick={props.onClose} title="关闭">
+            <button type="button" className="icon-btn small" onClick={props.onClose} title={t('common.close')}>
               <X size={17} />
             </button>
           </div>
@@ -94,8 +96,8 @@ export function HistoryDrawer(props: HistoryDrawerProps): JSX.Element | null {
           {runs.length === 0 && !loading ? (
             <div className="drawer-empty">
               <Clock3 size={26} />
-              <span>还没有运行记录</span>
-              <p>每次运行都会保存源码快照、编译参数与输出，可在这里恢复。</p>
+              <span>{t('panels.history.emptyTitle')}</span>
+              <p>{t('panels.history.emptyHint')}</p>
             </div>
           ) : (
             runs.map((run) => (
@@ -129,7 +131,7 @@ export function HistoryDrawer(props: HistoryDrawerProps): JSX.Element | null {
                     }}
                   >
                     {restoring === run.id ? <Loader2 size={12} className="spin" /> : <RotateCcw size={12} />}
-                    恢复代码
+                    {t('panels.history.restore')}
                   </span>
                 </div>
               </button>

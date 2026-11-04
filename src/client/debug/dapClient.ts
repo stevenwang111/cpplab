@@ -1,5 +1,6 @@
 import type { DapMessage } from '../../shared/types';
 import { wsUrl } from '../api';
+import { t } from '../i18n';
 
 export type DebugState = 'idle' | 'starting' | 'running' | 'paused' | 'terminated';
 
@@ -119,18 +120,18 @@ export class DapClient {
       this.handleMessage(message);
     };
     socket.onerror = () => {
-      this.handlers.onError('调试 WebSocket 连接错误');
+      this.handlers.onError(t('debug.error.ws'));
     };
     socket.onclose = (event) => {
       for (const [, pending] of this.pending) {
         clearTimeout(pending.timer);
-        pending.reject(new Error('调试连接已关闭'));
+        pending.reject(new Error(t('debug.error.connectionClosed')));
       }
       this.pending.clear();
       if (!this.terminatedNotified) {
         this.terminatedNotified = true;
         this.setState('terminated');
-        const reason = event.reason || '调试连接已关闭';
+        const reason = event.reason || t('debug.error.connectionClosed');
         this.handlers.onTerminated(reason);
       }
     };
@@ -161,7 +162,7 @@ export class DapClient {
       initCommands: [],
     });
     if (!launchResponse.success) {
-      throw new Error(launchResponse.message ?? '调试器拒绝启动目标程序');
+      throw new Error(launchResponse.message ?? t('debug.error.launchRejected'));
     }
     this.maybeSendConfigurationDone();
   }
@@ -181,7 +182,7 @@ export class DapClient {
         this.pending.delete(message.request_seq);
         clearTimeout(pending.timer);
         if (message.success) pending.resolve(message);
-        else pending.reject(new Error(message.message ?? `${message.command} 请求失败`));
+        else pending.reject(new Error(message.message ?? t('debug.error.requestFailed', { command: message.command })));
       }
       return;
     }
@@ -209,7 +210,7 @@ export class DapClient {
         break;
       }
       case 'terminated':
-        this.notifyTerminated('程序已结束');
+        this.notifyTerminated(t('debug.terminated.program'));
         break;
       case 'exited':
         this.handlers.onExited(Number((message.body as { exitCode?: number } | undefined)?.exitCode ?? 0));
@@ -258,14 +259,14 @@ export class DapClient {
   sendRequest(command: string, args?: Record<string, unknown>, timeoutMs = 20_000): Promise<Extract<DapMessage, { type: 'response' }>> {
     return new Promise((resolve, reject) => {
       if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-        reject(new Error('调试连接尚未就绪'));
+        reject(new Error(t('debug.error.notConnected')));
         return;
       }
       this.sequence += 1;
       const seq = this.sequence;
       const timer = window.setTimeout(() => {
         this.pending.delete(seq);
-        reject(new Error(`调试请求超时：${command}`));
+        reject(new Error(t('debug.error.timeout', { command })));
       }, timeoutMs);
       this.pending.set(seq, { resolve, reject, timer });
       try {

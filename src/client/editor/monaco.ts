@@ -1,5 +1,7 @@
 import * as monaco from 'monaco-editor';
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
+import type { MessageKey } from '../../shared/i18n';
+import { t } from '../i18n';
 
 self.MonacoEnvironment = {
   getWorker() {
@@ -59,82 +61,82 @@ monaco.editor.defineTheme(MONACO_THEME, {
 
 const SNIPPETS: Array<{
   label: string;
-  detail: string;
+  detailKey: MessageKey;
   insertText: string;
-  documentation: string;
+  documentationKey: MessageKey;
 }> = [
   {
     label: 'main',
-    detail: '程序入口',
-    documentation: '带标准输入输出加速的 main 函数',
+    detailKey: 'monaco.snippet.main.detail',
+    documentationKey: 'monaco.snippet.main.doc',
     insertText:
       'int main() {\n\tios::sync_with_stdio(false);\n\tcin.tie(nullptr);\n\t\n\t$0\n\treturn 0;\n}',
   },
   {
     label: 'for',
-    detail: '下标循环',
-    documentation: '从 0 到 n 的标准 for 循环',
+    detailKey: 'monaco.snippet.for.detail',
+    documentationKey: 'monaco.snippet.for.doc',
     insertText: 'for (int ${1:i} = 0; ${1:i} < ${2:n}; ++${1:i}) {\n\t$0\n}',
   },
   {
     label: 'forr',
-    detail: '范围循环',
-    documentation: '遍历容器的范围 for 循环',
+    detailKey: 'monaco.snippet.forr.detail',
+    documentationKey: 'monaco.snippet.forr.doc',
     insertText: 'for (const auto& ${1:item} : ${2:container}) {\n\t$0\n}',
   },
   {
     label: 'vec',
-    detail: 'vector 声明',
-    documentation: '声明一个指定大小的 vector',
+    detailKey: 'monaco.snippet.vec.detail',
+    documentationKey: 'monaco.snippet.vec.doc',
     insertText: 'vector<${1:int}> ${2:values}(${3:n});$0',
   },
   {
     label: 'sort',
-    detail: '排序',
-    documentation: '对容器进行升序排序',
+    detailKey: 'monaco.snippet.sort.detail',
+    documentationKey: 'monaco.snippet.sort.doc',
     insertText: 'sort(${1:values}.begin(), ${1:values}.end());$0',
   },
   {
     label: 'umap',
-    detail: 'unordered_map',
-    documentation: '声明一个哈希表',
+    detailKey: 'monaco.snippet.umap.detail',
+    documentationKey: 'monaco.snippet.umap.doc',
     insertText: 'unordered_map<${1:int}, ${2:int}> ${3:count};$0',
   },
   {
     label: 'fastio',
-    detail: '快速 IO',
-    documentation: '关闭同步并解除 cin/cout 绑定',
+    detailKey: 'monaco.snippet.fastio.detail',
+    documentationKey: 'monaco.snippet.fastio.doc',
     insertText: 'ios::sync_with_stdio(false);\ncin.tie(nullptr);$0',
   },
   {
     label: 'class',
-    detail: '类定义',
-    documentation: '包含构造函数与私有成员的类模板',
+    detailKey: 'monaco.snippet.class.detail',
+    documentationKey: 'monaco.snippet.class.doc',
     insertText:
       'class ${1:Solution} {\npublic:\n\t${1:Solution}() = default;\n\n\t$0\n\nprivate:\n\tint value_{0};\n};',
   },
   {
     label: 'struct',
-    detail: '结构体定义',
-    documentation: '简单的结构体模板',
+    detailKey: 'monaco.snippet.struct.detail',
+    documentationKey: 'monaco.snippet.struct.doc',
     insertText: 'struct ${1:Point} {\n\tint ${2:x};\n\tint ${3:y};\n};$0',
   },
   {
     label: 'include',
-    detail: '常用头文件',
-    documentation: '竞赛/练习常用的标准库头文件',
+    detailKey: 'monaco.snippet.include.detail',
+    documentationKey: 'monaco.snippet.include.doc',
     insertText: '#include <iostream>\n#include <vector>\n#include <algorithm>\nusing namespace std;\n\n$0',
   },
   {
     label: 'printf',
-    detail: '格式化输出',
-    documentation: 'printf 模板',
+    detailKey: 'monaco.snippet.printf.detail',
+    documentationKey: 'monaco.snippet.printf.doc',
     insertText: 'printf("${1:%d}\\n", ${2:value});$0',
   },
   {
     label: 'debug',
-    detail: '断点辅助输出',
-    documentation: '向 stderr 打印并换行，适合临时排查',
+    detailKey: 'monaco.snippet.debug.detail',
+    documentationKey: 'monaco.snippet.debug.doc',
     insertText: 'cerr << "${1:message}" << ${2:value} << endl;$0',
   },
 ];
@@ -160,8 +162,8 @@ export function registerCppSnippets(): void {
           kind: monaco.languages.CompletionItemKind.Snippet,
           insertText: snippet.insertText,
           insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-          detail: snippet.detail,
-          documentation: snippet.documentation,
+          detail: t(snippet.detailKey),
+          documentation: t(snippet.documentationKey),
           range,
           sortText: `0${snippet.label}`,
         })),

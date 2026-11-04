@@ -16,6 +16,7 @@ import {
 import type { DapScope, DapStackFrame, DapVariable, DebugState } from '../debug/dapClient';
 import type { EditorBreakpoint } from './CodeEditor';
 import { basename } from '../utils/format';
+import { t, useLocale } from '../i18n';
 
 export type DebugTab = 'stack' | 'variables' | 'watch' | 'breakpoints';
 
@@ -57,15 +58,16 @@ interface DebugPanelProps {
   onRemoveBreakpoint: (breakpoint: EditorBreakpoint) => void;
 }
 
-const STATE_LABEL: Record<DebugState, string> = {
-  idle: '未启动',
-  starting: '启动中',
-  running: '运行中',
-  paused: '已暂停',
-  terminated: '已结束',
+const STATE_LABEL: Record<DebugState, Parameters<typeof t>[0]> = {
+  idle: 'debug.state.idle',
+  starting: 'debug.state.starting',
+  running: 'debug.state.running',
+  paused: 'debug.state.paused',
+  terminated: 'debug.state.terminated',
 };
 
 export function DebugPanel(props: DebugPanelProps): JSX.Element {
+  useLocale();
   const { state } = props;
   const isPaused = state === 'paused';
   const isRunning = state === 'running';
@@ -78,16 +80,21 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
       <div className="debug-header">
         <div className="debug-title">
           <Bug size={16} />
-          调试
+          {t('debug.header.title')}
           <span className={`debug-state ${state}`}>
             <span className="debug-state-dot" />
-            {STATE_LABEL[state]}
+            {t(STATE_LABEL[state])}
           </span>
         </div>
         <div className="debug-actions">
           {!isActive && (
-            <button type="button" className="btn btn-debug btn-small" onClick={props.onStart} title="启动调试 (F5)">
-              <Play size={13} fill="currentColor" /> 开始
+            <button
+              type="button"
+              className="btn btn-debug btn-small"
+              onClick={props.onStart}
+              title={t('debug.action.start')}
+            >
+              <Play size={13} fill="currentColor" /> {t('debug.action.startShort')}
             </button>
           )}
           {isActive && (
@@ -97,7 +104,7 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
                 className="icon-btn small"
                 onClick={props.onContinue}
                 disabled={!isPaused}
-                title="继续 (F5)"
+                title={t('debug.action.continue')}
               >
                 <Play size={15} fill="currentColor" />
               </button>
@@ -106,11 +113,17 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
                 className="icon-btn small"
                 onClick={props.onPause}
                 disabled={!isRunning}
-                title="暂停"
+                title={t('debug.action.pause')}
               >
                 <Pause size={15} fill="currentColor" />
               </button>
-              <button type="button" className="icon-btn small" onClick={props.onNext} disabled={!isPaused} title="单步跳过 (F10)">
+              <button
+                type="button"
+                className="icon-btn small"
+                onClick={props.onNext}
+                disabled={!isPaused}
+                title={t('debug.action.stepOver')}
+              >
                 <StepForward size={15} />
               </button>
               <button
@@ -118,7 +131,7 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
                 className="icon-btn small"
                 onClick={props.onStepIn}
                 disabled={!isPaused}
-                title="单步步入 (F11)"
+                title={t('debug.action.stepInto')}
               >
                 <ArrowDownToLine size={15} />
               </button>
@@ -127,14 +140,24 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
                 className="icon-btn small"
                 onClick={props.onStepOut}
                 disabled={!isPaused}
-                title="单步步出 (Shift + F11)"
+                title={t('debug.action.stepOut')}
               >
                 <ArrowUpFromLine size={15} />
               </button>
-              <button type="button" className="icon-btn small" onClick={props.onRestart} title="重新启动调试">
+              <button
+                type="button"
+                className="icon-btn small"
+                onClick={props.onRestart}
+                title={t('debug.action.restart')}
+              >
                 <RotateCcw size={14} />
               </button>
-              <button type="button" className="icon-btn small danger" onClick={props.onStop} title="停止调试 (Shift + F5)">
+              <button
+                type="button"
+                className="icon-btn small danger"
+                onClick={props.onStop}
+                title={t('debug.action.stop')}
+              >
                 <Square size={14} fill="currentColor" />
               </button>
             </>
@@ -148,28 +171,28 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
           className={props.activeTab === 'stack' ? 'active' : ''}
           onClick={() => props.onTabChange('stack')}
         >
-          调用栈 {stackCount > 0 && <span className="debug-tab-count">{stackCount}</span>}
+          {t('debug.tab.stack')} {stackCount > 0 && <span className="debug-tab-count">{stackCount}</span>}
         </button>
         <button
           type="button"
           className={props.activeTab === 'variables' ? 'active' : ''}
           onClick={() => props.onTabChange('variables')}
         >
-          变量 {props.scopes.length > 0 && <span className="debug-tab-count">{props.scopes.length}</span>}
+          {t('debug.tab.variables')} {props.scopes.length > 0 && <span className="debug-tab-count">{props.scopes.length}</span>}
         </button>
         <button
           type="button"
           className={props.activeTab === 'watch' ? 'active' : ''}
           onClick={() => props.onTabChange('watch')}
         >
-          监视 {props.watches.length > 0 && <span className="debug-tab-count">{props.watches.length}</span>}
+          {t('debug.tab.watch')} {props.watches.length > 0 && <span className="debug-tab-count">{props.watches.length}</span>}
         </button>
         <button
           type="button"
           className={props.activeTab === 'breakpoints' ? 'active' : ''}
           onClick={() => props.onTabChange('breakpoints')}
         >
-          断点 {breakpointCount > 0 && <span className="debug-tab-count">{breakpointCount}</span>}
+          {t('debug.tab.breakpoints')} {breakpointCount > 0 && <span className="debug-tab-count">{breakpointCount}</span>}
         </button>
       </div>
 
@@ -178,8 +201,8 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
           <div className="stack-view">
             {props.frames.length === 0 ? (
               <DebugEmpty
-                title={isPaused ? '没有调用栈信息' : '程序暂停后显示调用栈'}
-                hint="命中断点或暂停后，这里会列出栈帧；点击可跳转到源码。"
+                title={isPaused ? t('debug.empty.stack.paused') : t('debug.empty.stack.idle')}
+                hint={t('debug.empty.stack.hint')}
               />
             ) : (
               props.frames.map((frame, index) => (
@@ -194,7 +217,7 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
                   <span className="frame-main">
                     <span className="frame-name">{frame.name}</span>
                     <span className="frame-location">
-                      {frame.source?.path ? basename(frame.source.path) : '未知文件'}:{frame.line}
+                      {frame.source?.path ? basename(frame.source.path) : t('debug.frame.unknownFile')}:{frame.line}
                     </span>
                   </span>
                 </button>
@@ -207,8 +230,8 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
           <div className="variables-view">
             {props.scopes.length === 0 ? (
               <DebugEmpty
-                title={isPaused ? '当前帧没有可见变量' : '暂停后查看局部变量'}
-                hint="变量按作用域分组，嵌套结构在展开时才加载。"
+                title={isPaused ? t('debug.empty.variables.paused') : t('debug.empty.variables.idle')}
+                hint={t('debug.empty.variables.hint')}
               />
             ) : (
               props.scopes.map((scope) => {
@@ -230,7 +253,7 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
                       <div className="scope-body">
                         {props.loadingRefs.has(scope.variablesReference) && (
                           <div className="tree-loading">
-                            <Loader2 size={12} className="spin" /> 加载中
+                            <Loader2 size={12} className="spin" /> {t('common.loading')}
                           </div>
                         )}
                         {variables?.map((variable) => (
@@ -244,7 +267,7 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
                             onExpand={props.onExpandVariable}
                           />
                         ))}
-                        {variables && variables.length === 0 && <div className="tree-empty">空</div>}
+                        {variables && variables.length === 0 && <div className="tree-empty">{t('common.empty')}</div>}
                       </div>
                     )}
                   </div>
@@ -266,22 +289,27 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
               <input
                 value={props.watchInput}
                 onChange={(event) => props.onWatchInputChange(event.target.value)}
-                placeholder="添加监视表达式"
+                placeholder={t('debug.watch.placeholder')}
                 spellCheck={false}
               />
-              <button type="submit" className="icon-btn small" disabled={!props.watchInput.trim()} title="添加">
+              <button
+                type="submit"
+                className="icon-btn small"
+                disabled={!props.watchInput.trim()}
+                title={t('common.add')}
+              >
                 <Plus size={14} />
               </button>
             </form>
             {props.watches.length === 0 ? (
-              <DebugEmpty title="还没有监视表达式" hint="暂停时会自动求值；例如 values.size() 或 p.x。" />
+              <DebugEmpty title={t('debug.empty.watch.title')} hint={t('debug.empty.watch.hint')} />
             ) : (
               props.watches.map((watch) => (
                 <div className="watch-row" key={watch.expression}>
                   <div className="watch-main">
                     <span className="watch-expression">{watch.expression}</span>
                     <span className={`watch-value ${watch.error ? 'error' : ''}`}>
-                      {watch.loading ? '求值中…' : watch.error ? watch.error : watch.value ?? '—'}
+                      {watch.loading ? t('debug.watch.evaluating') : watch.error ? watch.error : watch.value ?? '—'}
                       {watch.type && !watch.error && <span className="watch-type">{watch.type}</span>}
                     </span>
                   </div>
@@ -289,7 +317,7 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
                     type="button"
                     className="icon-btn tiny"
                     onClick={() => props.onRemoveWatch(watch.expression)}
-                    title="移除监视"
+                    title={t('debug.watch.remove')}
                   >
                     <X size={12} />
                   </button>
@@ -302,7 +330,7 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
         {props.activeTab === 'breakpoints' && (
           <div className="breakpoints-view">
             {props.breakpoints.length === 0 ? (
-              <DebugEmpty title="没有断点" hint="点击编辑器行号左侧的断点槽即可设置断点。" />
+              <DebugEmpty title={t('debug.empty.breakpoints.title')} hint={t('debug.empty.breakpoints.hint')} />
             ) : (
               groupBreakpoints(props.breakpoints).map(([file, list]) => (
                 <div className="breakpoint-group" key={file}>
@@ -311,16 +339,16 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
                     <div className="breakpoint-row" key={`${file}-${breakpoint.line}`}>
                       <button type="button" className="breakpoint-open" onClick={() => props.onOpenBreakpoint(breakpoint)}>
                         <span className={`bp-indicator ${breakpoint.verified ? 'verified' : 'unverified'}`} />
-                        <span>第 {breakpoint.line} 行</span>
+                        <span>{t('debug.breakpoint.line', { line: breakpoint.line })}</span>
                         <span className={`bp-status ${breakpoint.verified ? 'verified' : ''}`}>
-                          {breakpoint.verified ? '已验证' : '未验证'}
+                          {breakpoint.verified ? t('debug.breakpoint.verified') : t('debug.breakpoint.unverified')}
                         </span>
                       </button>
                       <button
                         type="button"
                         className="icon-btn tiny"
                         onClick={() => props.onRemoveBreakpoint(breakpoint)}
-                        title="移除断点"
+                        title={t('debug.breakpoint.remove')}
                       >
                         <X size={12} />
                       </button>
@@ -335,7 +363,7 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
 
       <div className="debug-footer">
         <CircleDot size={12} />
-        {isActive ? 'lldb-dap · 沙箱内调试' : '调试会话空闲'}
+        {isActive ? t('debug.footer.active') : t('debug.footer.idle')}
       </div>
     </aside>
   );
@@ -352,6 +380,7 @@ function groupBreakpoints(breakpoints: EditorBreakpoint[]): Array<[string, Edito
 }
 
 function DebugEmpty({ title, hint }: { title: string; hint: string }): JSX.Element {
+  useLocale();
   return (
     <div className="debug-empty">
       <span className="debug-empty-icon">
@@ -373,6 +402,7 @@ interface VariableRowProps {
 }
 
 function VariableRow(props: VariableRowProps): JSX.Element {
+  useLocale();
   const { variable } = props;
   const hasChildren = variable.variablesReference > 0;
   const isOpen = props.expanded.has(variable.variablesReference);
@@ -399,7 +429,7 @@ function VariableRow(props: VariableRowProps): JSX.Element {
         <div>
           {props.loadingRefs.has(variable.variablesReference) && (
             <div className="tree-loading" style={{ marginLeft: (props.depth + 1) * 13 }}>
-              <Loader2 size={11} className="spin" /> 加载中
+              <Loader2 size={11} className="spin" /> {t('common.loading')}
             </div>
           )}
           {children?.map((child) => (
@@ -415,7 +445,7 @@ function VariableRow(props: VariableRowProps): JSX.Element {
           ))}
           {children && children.length === 0 && (
             <div className="tree-empty" style={{ marginLeft: (props.depth + 1) * 13 }}>
-              空
+              {t('common.empty')}
             </div>
           )}
         </div>

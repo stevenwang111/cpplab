@@ -1,17 +1,20 @@
 import type { RunStatus } from '../../shared/types';
+import type { MessageKey } from '../../shared/i18n';
+import { getLocale, t } from '../i18n';
 
-export const STATUS_LABELS: Record<RunStatus, string> = {
-  OK: '通过',
-  CE: '编译错误',
-  RE: '运行错误',
-  TLE: '超时',
-  MLE: '内存超限',
-  OLE: '输出超限',
-  IE: '内部错误',
+const STATUS_KEYS: Record<RunStatus, MessageKey> = {
+  OK: 'fmt.status.ok',
+  CE: 'fmt.status.ce',
+  RE: 'fmt.status.re',
+  TLE: 'fmt.status.tle',
+  MLE: 'fmt.status.mle',
+  OLE: 'fmt.status.ole',
+  IE: 'fmt.status.ie',
 };
 
 export function statusLabel(status: RunStatus): string {
-  return STATUS_LABELS[status] ?? status;
+  const key = STATUS_KEYS[status];
+  return key ? t(key) : status;
 }
 
 export function statusClass(status: RunStatus): string {
@@ -32,15 +35,19 @@ export function formatMemory(kb: number): string {
 
 export function formatClock(timestamp: number): string {
   const date = new Date(timestamp);
-  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return date.toLocaleTimeString(getLocale(), {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }
 
 export function formatRelative(timestamp: number): string {
   const diff = Date.now() - timestamp;
-  if (diff < 60_000) return '刚刚';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
-  return new Date(timestamp).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+  if (diff < 60_000) return t('fmt.relative.justNow');
+  if (diff < 3_600_000) return t('fmt.relative.minutesAgo', { n: Math.floor(diff / 60_000) });
+  if (diff < 86_400_000) return t('fmt.relative.hoursAgo', { n: Math.floor(diff / 3_600_000) });
+  return new Date(timestamp).toLocaleDateString(getLocale(), { month: '2-digit', day: '2-digit' });
 }
 
 export function basename(filePath: string): string {

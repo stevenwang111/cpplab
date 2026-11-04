@@ -11,6 +11,7 @@ import type {
   RunSummary,
   RunRequest,
 } from '../shared/types';
+import { getLocale, t } from './i18n';
 
 export class ApiClientError extends Error {
   constructor(
@@ -29,6 +30,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: {
       'Content-Type': 'application/json',
+      // The server renders API errors, run phases and sandbox notes in this language.
+      'Accept-Language': getLocale(),
       ...(init?.headers ?? {}),
     },
   });
@@ -42,7 +45,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiClientError(
       response.status,
       body?.error.code ?? 'HTTP_ERROR',
-      body?.error.message ?? `请求失败（HTTP ${response.status}）`,
+      body?.error.message ?? t('api.httpError', { status: response.status }),
       body?.error.detail,
     );
   }

@@ -27,6 +27,7 @@ import { ConfirmModal, HelpModal, NewFileModal } from './components/Modals';
 import { ToastStack } from './components/ToastStack';
 import { useResizable } from './hooks/useResizable';
 import { useToast } from './hooks/useToast';
+import { getLocale, t, useLocale } from './i18n';
 import { DapClient, type DapBreakpoint, type DapHandlers, type DapScope, type DapStackFrame, type DapVariable, type DebugState } from './debug/dapClient';
 
 type SaveState = 'saved' | 'saving' | 'dirty' | 'error';
@@ -62,6 +63,7 @@ function saveLocal(key: string, value: unknown): void {
 }
 
 export default function App(): JSX.Element {
+  const locale = useLocale();
   const { toasts, push: pushToast, dismiss: dismissToast } = useToast();
 
   const [projectState, setProjectState] = useState<ProjectState | null>(null);
@@ -211,6 +213,15 @@ export default function App(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    // Text the server renders per language (seeded project name, starter-code
+    // comment) has to follow a language switch. Skipped while an edit is
+    // unsaved: applyProjectState would replace the buffers with the server copy.
+    if (!projectState || saveStatus !== 'saved') return;
+    void refreshProject();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locale]);
+
   function applyProjectState(state: ProjectState): void {
     setProjectState(state);
     const nextFiles = Object.fromEntries(state.files.map((file) => [file.path, file.content]));
@@ -249,7 +260,7 @@ export default function App(): JSX.Element {
       applyProjectState(state);
       setFatalError(null);
     } catch (error) {
-      setFatalError(error instanceof Error ? error.message : '无法连接后端服务');
+      setFatalError(error instanceof Error ? error.message : t('app.error.backendUnreachable'));
     } finally {
       setLoading(false);
     }
@@ -260,7 +271,7 @@ export default function App(): JSX.Element {
       const state = await api.project();
       applyProjectState(state);
     } catch (error) {
-      pushToast('error', error instanceof Error ? error.message : '刷新项目失败');
+      pushToast('error', error instanceof Error ? error.message : t('app.error.refreshProject'));
     }
   }
 
@@ -308,7 +319,7 @@ export default function App(): JSX.Element {
       }
     } catch (error) {
       setSaveStatus('error');
-      pushToast('error', error instanceof Error ? error.message : '保存失败');
+      pushToast('error', error instanceof Error ? error.message : t('app.error.saveFailed'));
     }
   }
 
@@ -372,14 +383,14 @@ export default function App(): JSX.Element {
       setProjectState((current) => (current ? { ...current, project: response.project } : current));
     } catch (error) {
       setProjectState(previous);
-      pushToast('error', error instanceof Error ? error.message : '更新项目设置失败');
+      pushToast('error', error instanceof Error ? error.message : t('app.error.updateSettings'));
     }
   }
 
   function handleCompiler(value: CompilerId): void {
     const target = compilers.find((item) => item.id === value);
     if (!target?.available) {
-      pushToast('error', `${value} 未安装`);
+      pushToast('error', t('app.toast.compilerMissing', { name: value }));
       return;
     }
     setCompiler(value);
@@ -400,7 +411,7 @@ export default function App(): JSX.Element {
     setEntry(file);
     setFileMenuOpen(false);
     void updateProjectSettings({ entry: file });
-    pushToast('success', `入口文件已切换为 ${file}`);
+    pushToast('success', t('app.toast.entrySwitched', { file }));
   }
 
   function applyRunResult(result: RunResult): void {
@@ -415,13 +426,13 @@ export default function App(): JSX.Element {
     );
     setHistoryVersion((value) => value + 1);
     if (result.status === 'CE') {
-      pushToast('error', '编译失败，请查看问题面板');
+      pushToast('error', t('app.toast.compileFailed'));
       setBottomTab('problems');
     } else if (result.status === 'OK') {
-      pushToast('success', `运行完成 · ${result.timeMs} ms`);
+      pushToast('success', t('app.toast.runDone', { ms: result.timeMs }));
       setBottomTab('output');
     } else {
-      pushToast('error', `运行结束：${result.status}`);
+      pushToast('error', t('app.toast.runEnded', { status: result.status }));
       setBottomTab('output');
     }
   }
@@ -440,7 +451,7 @@ export default function App(): JSX.Element {
         // The backend may still be recording the result; retry briefly.
       }
     }
-    pushToast('error', '运行连接中断，未能取回结果');
+    pushToast('error', t('app.toast.runDisconnected'));
     setRunPhase(null);
   }
 
@@ -453,14 +464,14 @@ export default function App(): JSX.Element {
     setLiveStdout('');
     setLiveStderr('');
     setRunPhase('queued');
-    setRunMessage('等待编译槽位');
+    setRunMessage(t('app.run.waitingSlot'));
     setBottomTab('output');
     setBottomCollapsed(false);
     setCurrentLine(null);
     lastTerminalPhaseRef.current = '';
     appendTerminal(`$ ${compiler} -std=${std} ${opt} ${extraFlags.join(' ')} /workspace/${entry} -o /workspace/prog`.replace(/\s+/g, ' '));
     appendTerminal(
-      `[sandbox] nsjail · 只读 rootfs · 无网络 · ${runLimits.memoryMb} MiB 内存 · ${runLimits.timeMs} ms 时限`,
+      `[sandbox] nsjail · ${t('app.term.sandboxRootfs')} · ${t('app.term.sandboxNoNetwork')} · ${t('app.term.sandboxMemory', { n: runLimits.memoryMb })} · ${t('app.term.sandboxTimeLimit', { n: runLimits.timeMs })}`,
     );
 
     try {
@@ -489,7 +500,7 @@ export default function App(): JSX.Element {
           if (runEvent.message) setRunMessage(runEvent.message);
           if (runEvent.phase === 'compiling' && lastTerminalPhaseRef.current !== 'compiling') {
             lastTerminalPhaseRef.current = 'compiling';
-            appendTerminal('[compile] g++ 正在沙箱内编译…');
+            appendTerminal(`[compile] ${t('app.term.compiling')}`);
           }
           if (runEvent.phase === 'running' && lastTerminalPhaseRef.current !== 'running') {
             lastTerminalPhaseRef.current = 'running';
@@ -515,7 +526,7 @@ export default function App(): JSX.Element {
         if (!gotResult) void recoverRun(response.runId);
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : '运行请求失败';
+      const message = error instanceof Error ? error.message : t('app.error.runRequestFailed');
       setRunPhase(null);
       setLiveStderr(message);
       setBottomTab('output');
@@ -530,16 +541,16 @@ export default function App(): JSX.Element {
     try {
       const response = await api.format(activeFile, content);
       if (!response.changed) {
-        pushToast('info', '代码已经符合格式要求');
+        pushToast('info', t('app.toast.alreadyFormatted'));
         return;
       }
       filesRef.current = { ...filesRef.current, [activeFile]: response.formatted };
       setFiles((previous) => ({ ...previous, [activeFile]: response.formatted }));
       markDirty(activeFile);
       await persistFile(activeFile, response.formatted);
-      pushToast('success', 'clang-format 已格式化当前文件');
+      pushToast('success', t('app.toast.formatted'));
     } catch (error) {
-      pushToast('error', error instanceof Error ? error.message : '格式化失败');
+      pushToast('error', error instanceof Error ? error.message : t('app.error.formatFailed'));
     }
   }
 
@@ -581,7 +592,7 @@ export default function App(): JSX.Element {
       void dapRef.current
         ?.setBreakpoints(file, lines)
         .then((result) => updateVerified(file, lines, result.map((item) => item.verified), result.map((item) => item.id)))
-        .catch((error) => pushToast('error', error instanceof Error ? error.message : '同步断点失败'));
+        .catch((error) => pushToast('error', error instanceof Error ? error.message : t('app.error.syncBreakpoints')));
     }
   }
 
@@ -616,7 +627,7 @@ export default function App(): JSX.Element {
       setVariables((previous) => ({ ...previous, [reference]: result }));
     } catch (error) {
       if (token === pauseTokenRef.current) {
-        appendDebug('error', error instanceof Error ? error.message : '读取变量失败');
+        appendDebug('error', error instanceof Error ? error.message : t('app.error.loadVariables'));
       }
     } finally {
       setLoadingRefs((previous) => {
@@ -658,7 +669,7 @@ export default function App(): JSX.Element {
       await refreshWatches(frame.id, token);
     } catch (error) {
       if (token === pauseTokenRef.current) {
-        appendDebug('error', error instanceof Error ? error.message : '读取作用域失败');
+        appendDebug('error', error instanceof Error ? error.message : t('app.error.loadScopes'));
       }
     }
   }
@@ -684,7 +695,7 @@ export default function App(): JSX.Element {
           setWatches((previous) =>
             previous.map((item) =>
               item.expression === watch.expression
-                ? { ...item, loading: false, error: error instanceof Error ? error.message : '求值失败' }
+                ? { ...item, loading: false, error: error instanceof Error ? error.message : t('app.error.evaluateFailed') }
                 : item,
             ),
           );
@@ -701,7 +712,7 @@ export default function App(): JSX.Element {
     setSelectedFrameId(null);
     setScopes([]);
     setVariables({});
-    appendDebug('system', `已暂停：${body.description ?? body.reason}`);
+    appendDebug('system', t('app.debug.paused', { reason: body.description ?? body.reason }));
     const dap = dapRef.current;
     if (!dap) return;
     try {
@@ -712,7 +723,7 @@ export default function App(): JSX.Element {
       if (nextFrames[0]) await loadFrame(nextFrames[0], token);
     } catch (error) {
       if (token === pauseTokenRef.current) {
-        appendDebug('error', error instanceof Error ? error.message : '读取调用栈失败');
+        appendDebug('error', error instanceof Error ? error.message : t('app.error.loadStack'));
       }
     }
   }
@@ -745,21 +756,21 @@ export default function App(): JSX.Element {
         setVariables({});
         setSelectedFrameId(null);
         setWatches((previous) => previous.map((watch) => ({ expression: watch.expression })));
-        appendDebug('system', '继续运行');
+        appendDebug('system', t('app.debug.continued'));
       },
       onOutput: (body) => {
         const kind = body.category === 'stdout' ? 'stdout' : body.category === 'stderr' ? 'stderr' : 'console';
         appendDebug(kind, body.output);
       },
       onTerminated: (message) => {
-        appendDebug('system', message ? `调试结束：${message}` : '调试结束');
+        appendDebug('system', message ? t('app.debug.endedWith', { reason: message }) : t('app.debug.ended'));
         setDebugState('terminated');
         debugStateRef.current = 'terminated';
         setDebugSession(null);
         setCurrentLine(null);
       },
       onExited: (exitCode) => {
-        appendDebug('system', `程序退出，退出码 ${exitCode}`);
+        appendDebug('system', t('app.debug.programExited', { code: exitCode }));
       },
       onLog: (message) => appendDebug('console', message),
       onBreakpoint: (breakpoint) => handleBreakpointEvent(breakpoint),
@@ -800,7 +811,7 @@ export default function App(): JSX.Element {
     setBottomCollapsed(false);
     setDiagnostics([]);
     setDebugTab('stack');
-    appendDebug('system', '正在编译调试目标（-g -O0）…');
+    appendDebug('system', t('app.debug.compilingTarget'));
     appendTerminal(`[debug] ${compiler} -std=${std} -g -O0 /workspace/${entry} -o /workspace/prog`);
 
     try {
@@ -825,18 +836,18 @@ export default function App(): JSX.Element {
         });
         dapRef.current = client;
         client.connect();
-        appendDebug('system', `lldb-dap 已启动 · ${response.cwd} · 编译 ${response.compileTimeMs} ms`);
-        appendTerminal(`[debug] lldb-dap 会话 ${response.sessionId.slice(0, 8)} 已创建`);
+        appendDebug('system', t('app.debug.lldbStarted', { cwd: response.cwd, ms: response.compileTimeMs }));
+        appendTerminal(`[debug] ${t('app.term.debugSessionCreated', { id: response.sessionId.slice(0, 8) })}`);
       } else {
         setDiagnostics((response.diagnostics ?? []) as Diagnostic[]);
         setDebugState('idle');
         debugStateRef.current = 'idle';
         setBottomTab('problems');
-        pushToast('error', '调试目标编译失败');
-        appendDebug('error', response.compileOutput || '调试目标编译失败');
+        pushToast('error', t('app.error.debugCompileFailed'));
+        appendDebug('error', response.compileOutput || t('app.error.debugCompileFailed'));
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : '启动调试失败';
+      const message = error instanceof Error ? error.message : t('app.error.startDebugFailed');
       setDebugState('terminated');
       debugStateRef.current = 'terminated';
       setDebugSession(null);
@@ -858,13 +869,13 @@ export default function App(): JSX.Element {
     setFrames([]);
     setScopes([]);
     setSelectedFrameId(null);
-    appendDebug('system', '调试会话已停止');
-    appendTerminal('[debug] 会话已停止');
+    appendDebug('system', t('app.debug.sessionStopped'));
+    appendTerminal(`[debug] ${t('app.term.debugSessionStopped')}`);
   }
 
   function ensurePaused(): boolean {
     if (debugStateRef.current !== 'paused') {
-      pushToast('info', '程序暂停后才能执行该操作');
+      pushToast('info', t('app.toast.needPaused'));
       return false;
     }
     return true;
@@ -903,7 +914,7 @@ export default function App(): JSX.Element {
     setScopes([]);
     setSelectedFrameId(null);
     void dapRef.current.restart().catch((error) => pushToast('error', error.message));
-    appendDebug('system', '重新启动调试目标');
+    appendDebug('system', t('app.debug.restarted'));
   }
 
   function handleSelectFrame(frame: DapStackFrame): void {
@@ -944,7 +955,7 @@ export default function App(): JSX.Element {
       setWatches((previous) =>
         previous.map((watch) =>
           watch.expression === expression
-            ? { ...watch, loading: false, error: error instanceof Error ? error.message : '求值失败' }
+            ? { ...watch, loading: false, error: error instanceof Error ? error.message : t('app.error.evaluateFailed') }
             : watch,
         ),
       );
@@ -955,7 +966,7 @@ export default function App(): JSX.Element {
     const expression = watchInput.trim();
     if (!expression) return;
     if (watchesRef.current.some((watch) => watch.expression === expression)) {
-      pushToast('info', '该监视表达式已存在');
+      pushToast('info', t('app.toast.watchExists'));
       return;
     }
     const next = [...watchesRef.current, { expression }];
@@ -984,7 +995,7 @@ export default function App(): JSX.Element {
       appendDebug('repl', `${result.result}${result.type ? `  (${result.type})` : ''}`);
       setDebugExpression('');
     } catch (error) {
-      appendDebug('error', error instanceof Error ? error.message : '求值失败');
+      appendDebug('error', error instanceof Error ? error.message : t('app.error.evaluateFailed'));
     } finally {
       setEvaluationBusy(false);
     }
@@ -992,7 +1003,7 @@ export default function App(): JSX.Element {
 
   function handleOpenProblem(diagnostic: Diagnostic): void {
     if (!filesRef.current[diagnostic.file]) {
-      pushToast('error', `文件 ${diagnostic.file} 不在当前工作区`);
+      pushToast('error', t('app.toast.fileNotInWorkspace', { file: diagnostic.file }));
       return;
     }
     openFile(diagnostic.file, diagnostic.line, diagnostic.col);
@@ -1006,7 +1017,7 @@ export default function App(): JSX.Element {
     setRunPhase(null);
     setBottomTab('output');
     setBottomCollapsed(false);
-    appendTerminal(`[history] 载入 ${new Date(run.createdAt).toLocaleString('zh-CN')} 的运行记录`);
+    appendTerminal(`[history] ${t('app.term.historyLoaded', { when: new Date(run.createdAt).toLocaleString(getLocale()) })}`);
     setHistoryOpen(false);
   }
 
@@ -1018,7 +1029,7 @@ export default function App(): JSX.Element {
     setOpenTabs((previous) => (previous.includes(path) ? previous : [...previous, path]));
     setActiveFile(path);
     activeFileRef.current = path;
-    appendTerminal(`[file] 已创建 ${path}`);
+    appendTerminal(`[file] ${t('app.term.fileCreated', { path })}`);
   }
 
   async function handleDeleteFile(): Promise<void> {
@@ -1046,9 +1057,9 @@ export default function App(): JSX.Element {
       const nextBreakpoints = breakpointsRef.current.filter((breakpoint) => breakpoint.file !== file);
       breakpointsRef.current = nextBreakpoints;
       setBreakpoints(nextBreakpoints);
-      pushToast('success', `已删除 ${file}`);
+      pushToast('success', t('app.toast.deletedFile', { file }));
     } catch (error) {
-      pushToast('error', error instanceof Error ? error.message : '删除文件失败');
+      pushToast('error', error instanceof Error ? error.message : t('app.error.deleteFileFailed'));
     } finally {
       setDeleteTarget(null);
     }
@@ -1203,7 +1214,7 @@ export default function App(): JSX.Element {
           <Code2 size={30} />
         </div>
         <h1>CppLab</h1>
-        <p>正在连接本地沙箱…</p>
+        <p>{t('app.boot.connecting')}</p>
         <Loader2 size={20} className="spin" />
       </div>
     );
@@ -1215,10 +1226,10 @@ export default function App(): JSX.Element {
         <div className="boot-mark error">
           <AlertTriangle size={28} />
         </div>
-        <h1>无法加载工作区</h1>
-        <p>{fatalError ?? '项目数据不可用'}</p>
+        <h1>{t('app.boot.loadFailed')}</h1>
+        <p>{fatalError ?? t('app.boot.noProjectData')}</p>
         <button type="button" className="btn btn-primary" onClick={() => void bootstrap()}>
-          <RefreshCw size={15} /> 重试
+          <RefreshCw size={15} /> {t('common.retry')}
         </button>
       </div>
     );
@@ -1260,8 +1271,11 @@ export default function App(): JSX.Element {
         <div className="system-banner">
           <ShieldAlert size={15} />
           <span>
-            沙箱未就绪：{capabilities?.sandbox.detail ?? 'nsjail 不可用'}。运行与调试已禁用，请先执行
-            <code>npm run sandbox:setup</code>。
+            {t('app.banner.sandboxNotReady')}
+            {capabilities?.sandbox.detail ?? t('app.banner.sandboxNoNsjail')}
+            {t('app.banner.sandboxHint')}
+            <code>npm run sandbox:setup</code>
+            {t('app.banner.sandboxSuffix')}
           </span>
         </div>
       )}
@@ -1319,7 +1333,7 @@ export default function App(): JSX.Element {
                   onSave={() => void saveAll()}
                 />
               ) : (
-                <div className="editor-empty">没有可编辑的文件</div>
+                <div className="editor-empty">{t('app.editor.emptyFiles')}</div>
               )}
             </div>
           </section>
@@ -1328,7 +1342,7 @@ export default function App(): JSX.Element {
             <div
               className={`resizer horizontal ${bottomResize.dragging ? 'dragging' : ''}`}
               onPointerDown={bottomResize.startDrag}
-              title="拖动调整底部面板高度"
+              title={t('app.resizer.bottomHeight')}
             />
           )}
 
@@ -1361,7 +1375,7 @@ export default function App(): JSX.Element {
         <div
           className={`resizer vertical ${debugResize.dragging ? 'dragging' : ''}`}
           onPointerDown={debugResize.startDrag}
-          title="拖动调整调试侧栏宽度"
+          title={t('app.resizer.debugWidth')}
         />
 
         <DebugPanel
@@ -1425,7 +1439,7 @@ export default function App(): JSX.Element {
           onChange={setEditorSettings}
           onRenameProject={async (name) => {
             await updateProjectSettings({}, name);
-            pushToast('success', '项目名称已更新');
+            pushToast('success', t('app.toast.projectRenamed'));
           }}
           onClose={() => setSettingsOpen(false)}
         />
@@ -1470,9 +1484,9 @@ export default function App(): JSX.Element {
 
       <ConfirmModal
         open={deleteTarget !== null}
-        title="删除文件"
-        message={`确定删除 ${deleteTarget ?? ''}？该操作会从工作区移除文件，历史运行快照仍可恢复。`}
-        confirmLabel="删除"
+        title={t('app.delete.fileTitle')}
+        message={t('app.delete.fileMessage', { file: deleteTarget ?? '' })}
+        confirmLabel={t('common.delete')}
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => void handleDeleteFile()}
       />

@@ -10,7 +10,8 @@ import type {
   RunStatus,
   StdId,
 } from '../shared/types.js';
-import { ApiError, SandboxUnavailableError } from './util/errors.js';
+import { translate, type Locale } from '../shared/i18n/index.js';
+import { errorText } from './util/errors.js';
 import { compileWorkspace, executeCompiled, type CompileInput } from './compile/runner.js';
 import { cleanupWorkdir } from './sandbox/nsjail.js';
 import { newId, recordRun } from './db.js';
@@ -29,6 +30,8 @@ export interface PreparedRun {
   extraFlags: string[];
   stdin: string;
   limits: { timeMs: number; memoryMb: number; outputBytes: number };
+  /** UI language captured when the run was requested. */
+  locale: Locale;
 }
 
 export class RunSession {
@@ -82,7 +85,7 @@ export function startRun(prepared: PreparedRun): { runId: string } {
   const session = new RunSession(id, Date.now());
   sessions.set(id, session);
   void executeRun(session, prepared).catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorText(error, prepared.locale);
     const result = buildFailureResult(id, prepared, 'IE', message);
     session.emit({ type: 'error', message });
     session.finish(result);
@@ -103,15 +106,16 @@ async function executeRun(session: RunSession, prepared: PreparedRun): Promise<v
     opt: prepared.opt,
     extraFlags: prepared.extraFlags,
   };
+  const locale = prepared.locale;
 
-  session.emit({ type: 'phase', phase: 'queued', message: '等待编译槽位' });
+  session.emit({ type: 'phase', phase: 'queued', message: translate(locale, 'run.phase.queuedCompile') });
   let releaseCompile: (() => void) | undefined;
   let releaseRun: (() => void) | undefined;
   let workdir: string | undefined;
 
   try {
     releaseCompile = await compileSemaphore.acquire();
-    session.emit({ type: 'phase', phase: 'compiling', message: '正在编译' });
+    session.emit({ type: 'phase', phase: 'compiling', message: translate(locale, 'run.phase.compiling') });
 
     const compileInput: CompileInput = {
       files: prepared.fileList,
@@ -120,6 +124,7 @@ async function executeRun(session: RunSession, prepared: PreparedRun): Promise<v
       std: prepared.std,
       opt: prepared.opt,
       extraFlags: prepared.extraFlags,
+      locale,
     };
     const compile = await compileWorkspace(compileInput);
     workdir = compile.workdir;
@@ -147,15 +152,16 @@ async function executeRun(session: RunSession, prepared: PreparedRun): Promise<v
       return;
     }
 
-    session.emit({ type: 'phase', phase: 'queued', message: '等待运行槽位' });
+    session.emit({ type: 'phase', phase: 'queued', message: translate(locale, 'run.phase.queuedRun') });
     releaseRun = await runSemaphore.acquire();
-    session.emit({ type: 'phase', phase: 'running', message: '程序运行中' });
+    session.emit({ type: 'phase', phase: 'running', message: translate(locale, 'run.phase.running') });
 
     const outcome = await executeCompiled(workdir, {
       timeMs: prepared.limits.timeMs,
       memoryMb: prepared.limits.memoryMb,
       outputBytes: prepared.limits.outputBytes,
       stdin: prepared.stdin,
+      locale,
       onStdout: (data) => session.emit({ type: 'stdout', data }),
       onStderr: (data) => session.emit({ type: 'stderr', data }),
     });
@@ -175,22 +181,13 @@ async function executeRun(session: RunSession, prepared: PreparedRun): Promise<v
       createdAt: Date.now(),
       source,
     };
-    session.emit({ type: 'phase', phase: 'finished', message: '运行结束' });
+    session.emit({ type: 'phase', phase: 'finished', message: translate(locale, 'run.phase.finished') });
     finishRun(session, result, prepared);
   } catch (error) {
-    if (error instanceof SandboxUnavailableError) {
-      session.emit({ type: 'error', message: error.message });
-      const result = buildFailureResult(session.id, prepared, 'IE', error.message);
-      finishRun(session, result, prepared);
-      return;
-    }
-    if (error instanceof ApiError) {
-      session.emit({ type: 'error', message: error.message });
-      const result = buildFailureResult(session.id, prepared, 'IE', error.message);
-      finishRun(session, result, prepared);
-      return;
-    }
-    throw error;
+    const message = errorText(error, locale);
+    session.emit({ type: 'error', message });
+    const result = buildFailureResult(session.id, prepared, 'IE', message);
+    finishRun(session, result, prepared);
   } finally {
     releaseCompile?.();
     releaseRun?.();
@@ -279,11 +276,10 @@ export function buildPrepared(input: {
   extraFlags: string[];
   stdin: string;
   limits: { timeMs: number; memoryMb: number; outputBytes: number };
+  locale: Locale;
 }): PreparedRun {
   return {
     ...input,
     fileList: Object.entries(input.files).map(([filePath, content]) => ({ path: filePath, content })),
   };
 }
-
-

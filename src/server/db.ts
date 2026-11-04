@@ -15,6 +15,7 @@ import type {
   StdId,
 } from '../shared/types.js';
 import { config } from './config.js';
+import { migrateLegacySeed } from './i18nMigration.js';
 
 interface ProjectRow {
   id: string;
@@ -64,7 +65,7 @@ const DEFAULT_SOURCE = `#include <algorithm>
 
 using namespace std;
 
-// 在 main 中设置断点，观察 values 的变化。
+// __i18n__:db.sampleComment
 int main() {
     const int n = 8;
     vector<int> values(n);
@@ -148,6 +149,8 @@ export function initDb(): void {
     );
   `);
 
+  migrateLegacySeed(db);
+
   const now = Date.now();
   const existing = db.prepare('SELECT id FROM projects WHERE id = ?').get(DEFAULT_PROJECT_ID) as
     | { id: string }
@@ -156,7 +159,7 @@ export function initDb(): void {
     db.prepare(
       `INSERT INTO projects (id, owner, name, entry, compiler, std, opt, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(DEFAULT_PROJECT_ID, null, '我的 C++ 项目', 'main.cpp', 'g++', 'c++20', '-O0', now, now);
+    ).run(DEFAULT_PROJECT_ID, null, '__i18n__:db.projectName', 'main.cpp', 'g++', 'c++20', '-O0', now, now);
     db.prepare('INSERT INTO files (project_id, path, content, updated_at) VALUES (?, ?, ?, ?)').run(
       DEFAULT_PROJECT_ID,
       'main.cpp',

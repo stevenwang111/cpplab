@@ -1,5 +1,6 @@
 import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
 import type { ToastItem } from '../hooks/useToast';
+import { t, useLocale } from '../i18n';
 
 export function ToastStack({
   toasts,
@@ -8,6 +9,7 @@ export function ToastStack({
   toasts: ToastItem[];
   onDismiss: (id: number) => void;
 }): JSX.Element {
+  useLocale();
   return (
     <div className="toast-stack" aria-live="polite">
       {toasts.map((toast) => (
@@ -22,7 +24,7 @@ export function ToastStack({
             )}
           </span>
           <span className="toast-message">{toast.message}</span>
-          <button type="button" className="toast-close" onClick={() => onDismiss(toast.id)} title="关闭">
+          <button type="button" className="toast-close" onClick={() => onDismiss(toast.id)} title={t('common.close')}>
             <X size={13} />
           </button>
         </div>

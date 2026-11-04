@@ -16,7 +16,7 @@ fi
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
 
-echo "[1/4] 安装编译/调试/沙箱依赖"
+echo "[1/4] Install build/debug/sandbox dependencies"
 PACKAGES=(clang clang-format lldb time dumb-init build-essential libprotobuf-dev protobuf-compiler libnl-3-dev libnl-route-3-dev libcap-dev bison flex pkg-config uidmap git)
 MISSING=()
 for pkg in "${PACKAGES[@]}"; do
@@ -27,7 +27,7 @@ if ((${#MISSING[@]})); then
   "${SUDO[@]}" apt-get install -y --no-install-recommends "${MISSING[@]}"
 fi
 
-echo "[2/4] 准备 nsjail"
+echo "[2/4] Prepare nsjail"
 NSJAIL="$(command -v nsjail || true)"
 if [[ -z "$NSJAIL" ]]; then
   BUILD_DIR="$ROOT/.build/nsjail"
@@ -50,7 +50,7 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 echo "      nsjail: $NSJAIL"
 
-echo "[3/4] 创建沙箱设备节点"
+echo "[3/4] Create sandbox device nodes"
 DEV_DIR="$ROOT/data/sandbox/dev"
 "${SUDO[@]}" mkdir -p "$DEV_DIR"
 "${SUDO[@]}" chown -R "$(id -u):$(id -g)" "$ROOT/data/sandbox"
@@ -71,7 +71,7 @@ create_device urandom 1 9
 create_device random 1 8
 ls -l "$DEV_DIR"
 
-echo "[4/4] 检查工具"
+echo "[4/4] Check tools"
 for tool in g++ clang-format lldb-dap nsjail; do
   if command -v "$tool" >/dev/null 2>&1; then
     printf '      %-14s %s\n' "$tool" "$(command -v "$tool")"
@@ -81,5 +81,5 @@ for tool in g++ clang-format lldb-dap nsjail; do
 done
 
 mkdir -p "$ROOT/data/runtime/logs" "$ROOT/data/sandbox/rootfs"
-echo "完成。启动后端后访问 http://127.0.0.1:3000（或开发模式 http://127.0.0.1:5173）。"
-echo "提示：nsjail 被设置为 setuid root，仅建议在本机单用户/内网环境使用。"
+echo "Done. After starting the backend, open http://127.0.0.1:3000 (or http://127.0.0.1:5173 in development mode)."
+echo "Note: nsjail is installed setuid root; only use it on a local single-user / intranet setup."

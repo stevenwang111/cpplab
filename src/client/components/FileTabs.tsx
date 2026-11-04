@@ -1,4 +1,5 @@
 import { FileCode2, Plus, X } from 'lucide-react';
+import { t, useLocale } from '../i18n';
 
 interface FileTabsProps {
   openTabs: string[];
@@ -12,6 +13,7 @@ interface FileTabsProps {
 }
 
 export function FileTabs(props: FileTabsProps): JSX.Element {
+  useLocale();
   return (
     <div className="file-tabs">
       <div className="file-tabs-scroll">
@@ -24,7 +26,9 @@ export function FileTabs(props: FileTabsProps): JSX.Element {
               key={file}
               className={`file-tab ${isActive ? 'active' : ''} ${file === props.entry ? 'is-entry' : ''}`}
               onClick={() => props.onSelect(file)}
-              title={`${file}${file === props.entry ? '（入口文件）' : ''}`}
+              title={
+                file === props.entry ? t('chrome.filetabs.entryFile', { name: file }) : file
+              }
             >
               <FileCode2 size={14} className="file-tab-icon" />
               <span className="file-tab-name">{file.split('/').pop()}</span>
@@ -34,7 +38,7 @@ export function FileTabs(props: FileTabsProps): JSX.Element {
                 role="button"
                 tabIndex={-1}
                 className="file-tab-close"
-                aria-label={`关闭 ${file}`}
+                aria-label={t('chrome.filetabs.closeFile', { name: file })}
                 onClick={(event) => {
                   event.stopPropagation();
                   props.onClose(file);
@@ -46,7 +50,7 @@ export function FileTabs(props: FileTabsProps): JSX.Element {
           );
         })}
       </div>
-      <button type="button" className="file-tab-add" onClick={props.onNewFile} title="新建文件">
+      <button type="button" className="file-tab-add" onClick={props.onNewFile} title={t('chrome.files.newFile')}>
         <Plus size={15} />
       </button>
     </div>

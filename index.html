@@ -7,6 +7,30 @@
     <meta name="theme-color" content="#ffffff" />
     <title>CppLab · 在线 C++ IDE</title>
     <meta name="description" content="在线 C++ 编辑、编译、运行与图形化调试" />
+    <script>
+      // Apply the stored language before the bundle paints, so the tab title and
+      // description never flash in the wrong language. Messages duplicated here
+      // are the same ones src/shared/i18n/messages/common.ts ships as meta.*.
+      (function () {
+        var lang = null;
+        try {
+          var stored = localStorage.getItem('cpplab.lang');
+          if (stored === 'en' || stored === 'zh-CN') lang = stored;
+        } catch (error) {}
+        if (!lang) lang = /^zh/i.test(navigator.language || '') ? 'zh-CN' : 'en';
+        document.documentElement.lang = lang;
+        document.title = lang === 'zh-CN' ? 'CppLab · 在线 C++ IDE' : 'CppLab · Online C++ IDE';
+        var meta = document.querySelector('meta[name="description"]');
+        if (meta) {
+          meta.setAttribute(
+            'content',
+            lang === 'zh-CN'
+              ? '在线 C++ 编辑、编译、运行与图形化调试'
+              : 'Edit, compile, run and debug C++ in your browser',
+          );
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

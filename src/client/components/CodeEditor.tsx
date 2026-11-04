@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { Diagnostic } from '../../shared/types';
 import { monaco, modelUri, MONACO_THEME, registerCppSnippets } from '../editor/monaco';
+import { t, useLocale } from '../i18n';
 
 export interface EditorBreakpoint {
   file: string;
@@ -30,6 +31,7 @@ interface CodeEditorProps {
 }
 
 export function CodeEditor(props: CodeEditorProps): JSX.Element {
+  const locale = useLocale();
   const hostRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const modelsRef = useRef<Map<string, monaco.editor.ITextModel>>(new Map());
@@ -165,7 +167,7 @@ export function CodeEditor(props: CodeEditorProps): JSX.Element {
   useEffect(() => {
     applyBreakpointDecorations();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.breakpoints, props.files]);
+  }, [props.breakpoints, props.files, locale]);
 
   useEffect(() => {
     applyCurrentLineDecoration();
@@ -234,7 +236,7 @@ export function CodeEditor(props: CodeEditorProps): JSX.Element {
         options: {
           glyphMarginClassName: breakpoint.verified ? 'bp-dot' : 'bp-dot-unverified',
           glyphMarginHoverMessage: {
-            value: breakpoint.verified ? '已设置断点' : '断点未验证（可能不在可执行行）',
+            value: breakpoint.verified ? t('debug.breakpoint.hoverVerified') : t('debug.breakpoint.hoverUnverified'),
           },
           stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
         },

@@ -1,0 +1,86 @@
+/** Strings for one UI area. See ./common.ts for the slice contract. */
+
+const zhCN = {
+  // src/client/utils/format.ts
+  'fmt.status.ok': '通过',
+  'fmt.status.ce': '编译错误',
+  'fmt.status.re': '运行错误',
+  'fmt.status.tle': '超时',
+  'fmt.status.mle': '内存超限',
+  'fmt.status.ole': '输出超限',
+  'fmt.status.ie': '内部错误',
+  'fmt.relative.justNow': '刚刚',
+  'fmt.relative.minutesAgo': '{n} 分钟前',
+  'fmt.relative.hoursAgo': '{n} 小时前',
+
+  // src/client/api.ts
+  'api.httpError': '请求失败（HTTP {status}）',
+
+  // src/client/editor/monaco.ts
+  'monaco.snippet.main.detail': '程序入口',
+  'monaco.snippet.main.doc': '带标准输入输出加速的 main 函数',
+  'monaco.snippet.for.detail': '下标循环',
+  'monaco.snippet.for.doc': '从 0 到 n 的标准 for 循环',
+  'monaco.snippet.forr.detail': '范围循环',
+  'monaco.snippet.forr.doc': '遍历容器的范围 for 循环',
+  'monaco.snippet.vec.detail': 'vector 声明',
+  'monaco.snippet.vec.doc': '声明一个指定大小的 vector',
+  'monaco.snippet.sort.detail': '排序',
+  'monaco.snippet.sort.doc': '对容器进行升序排序',
+  'monaco.snippet.umap.detail': 'unordered_map',
+  'monaco.snippet.umap.doc': '声明一个哈希表',
+  'monaco.snippet.fastio.detail': '快速 IO',
+  'monaco.snippet.fastio.doc': '关闭同步并解除 cin/cout 绑定',
+  'monaco.snippet.class.detail': '类定义',
+  'monaco.snippet.class.doc': '包含构造函数与私有成员的类模板',
+  'monaco.snippet.struct.detail': '结构体定义',
+  'monaco.snippet.struct.doc': '简单的结构体模板',
+  'monaco.snippet.include.detail': '常用头文件',
+  'monaco.snippet.include.doc': '竞赛/练习常用的标准库头文件',
+  'monaco.snippet.printf.detail': '格式化输出',
+  'monaco.snippet.printf.doc': 'printf 模板',
+  'monaco.snippet.debug.detail': '断点辅助输出',
+  'monaco.snippet.debug.doc': '向 stderr 打印并换行，适合临时排查',
+} as const;
+
+const en: Record<keyof typeof zhCN, string> = {
+  'fmt.status.ok': 'Passed',
+  'fmt.status.ce': 'Compile error',
+  'fmt.status.re': 'Runtime error',
+  'fmt.status.tle': 'Timeout',
+  'fmt.status.mle': 'Memory limit exceeded',
+  'fmt.status.ole': 'Output limit exceeded',
+  'fmt.status.ie': 'Internal error',
+  'fmt.relative.justNow': 'Just now',
+  'fmt.relative.minutesAgo': '{n} minutes ago',
+  'fmt.relative.hoursAgo': '{n} hours ago',
+
+  'api.httpError': 'Request failed (HTTP {status})',
+
+  'monaco.snippet.main.detail': 'Program entry',
+  'monaco.snippet.main.doc': 'main with fast I/O',
+  'monaco.snippet.for.detail': 'Indexed loop',
+  'monaco.snippet.for.doc': 'Standard indexed for loop from 0 to n',
+  'monaco.snippet.forr.detail': 'Range loop',
+  'monaco.snippet.forr.doc': 'Range-based for loop over a container',
+  'monaco.snippet.vec.detail': 'vector declaration',
+  'monaco.snippet.vec.doc': 'Declare a vector of a given size',
+  'monaco.snippet.sort.detail': 'Sort',
+  'monaco.snippet.sort.doc': 'Sort a container in ascending order',
+  'monaco.snippet.umap.detail': 'unordered_map',
+  'monaco.snippet.umap.doc': 'Declare a hash map',
+  'monaco.snippet.fastio.detail': 'Fast I/O',
+  'monaco.snippet.fastio.doc': 'Disable sync and unbind cin/cout',
+  'monaco.snippet.class.detail': 'Class definition',
+  'monaco.snippet.class.doc': 'Class template with a constructor and private members',
+  'monaco.snippet.struct.detail': 'Struct definition',
+  'monaco.snippet.struct.doc': 'Simple struct template',
+  'monaco.snippet.include.detail': 'Common headers',
+  'monaco.snippet.include.doc': 'Standard headers for contests and practice',
+  'monaco.snippet.printf.detail': 'Formatted output',
+  'monaco.snippet.printf.doc': 'printf template',
+  'monaco.snippet.debug.detail': 'Debug output',
+  'monaco.snippet.debug.doc': 'Prints to stderr with a newline, handy for quick debugging',
+};
+
+export default { 'zh-CN': zhCN, en };

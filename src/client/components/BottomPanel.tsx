@@ -12,7 +12,9 @@ import {
   TriangleAlert,
 } from 'lucide-react';
 import type { Diagnostic, RunPhase, RunResult } from '../../shared/types';
+import type { MessageKey } from '../../shared/i18n';
 import type { DebugState } from '../debug/dapClient';
+import { t, useLocale } from '../i18n';
 import { formatDuration, formatMemory, statusClass, statusLabel } from '../utils/format';
 
 export type BottomTab = 'output' | 'stdin' | 'terminal' | 'debug' | 'problems';
@@ -48,15 +50,16 @@ interface BottomPanelProps {
   onClearOutput: () => void;
 }
 
-const TABS: Array<{ id: BottomTab; label: string; icon: typeof CirclePlay }> = [
-  { id: 'output', label: '运行输出', icon: CirclePlay },
-  { id: 'stdin', label: '输入', icon: Keyboard },
-  { id: 'terminal', label: '终端', icon: SquareTerminal },
-  { id: 'debug', label: '调试控制台', icon: Bug },
-  { id: 'problems', label: '问题', icon: TriangleAlert },
+const TABS: Array<{ id: BottomTab; labelKey: MessageKey; icon: typeof CirclePlay }> = [
+  { id: 'output', labelKey: 'panels.tab.output', icon: CirclePlay },
+  { id: 'stdin', labelKey: 'panels.tab.stdin', icon: Keyboard },
+  { id: 'terminal', labelKey: 'panels.tab.terminal', icon: SquareTerminal },
+  { id: 'debug', labelKey: 'panels.tab.debug', icon: Bug },
+  { id: 'problems', labelKey: 'panels.tab.problems', icon: TriangleAlert },
 ];
 
 export function BottomPanel(props: BottomPanelProps): JSX.Element {
+  useLocale();
   const problemCount = props.diagnostics.length;
   const isRunning = props.runPhase === 'compiling' || props.runPhase === 'running' || props.runPhase === 'queued';
 
@@ -74,7 +77,7 @@ export function BottomPanel(props: BottomPanelProps): JSX.Element {
                 onClick={() => props.onTabChange(tab.id)}
               >
                 <Icon size={14} />
-                {tab.label}
+                {t(tab.labelKey)}
                 {tab.id === 'problems' && problemCount > 0 && (
                   <span className={`tab-badge ${props.diagnostics.some((item) => item.severity === 'error') ? 'error' : ''}`}>
                     {problemCount}
@@ -96,17 +99,17 @@ export function BottomPanel(props: BottomPanelProps): JSX.Element {
           )}
           {isRunning && (
             <span className="metric running">
-              <Loader2 size={12} className="spin" /> {props.runMessage || '运行中'}
+              <Loader2 size={12} className="spin" /> {props.runMessage || t('panels.meta.running')}
             </span>
           )}
-          <button type="button" className="icon-btn small" onClick={props.onClearOutput} title="清空当前面板">
+          <button type="button" className="icon-btn small" onClick={props.onClearOutput} title={t('panels.action.clearPanel')}>
             <Trash2 size={14} />
           </button>
           <button
             type="button"
             className="icon-btn small"
             onClick={props.onToggleCollapse}
-            title={props.collapsed ? '展开面板' : '收起面板'}
+            title={props.collapsed ? t('panels.action.expand') : t('panels.action.collapse')}
           >
             {props.collapsed ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
           </button>
@@ -120,7 +123,7 @@ export function BottomPanel(props: BottomPanelProps): JSX.Element {
               {isRunning && (
                 <div className="run-progress">
                   <span className="run-progress-dot" />
-                  {props.runMessage || '正在执行'}
+                  {props.runMessage || t('panels.meta.executing')}
                 </div>
               )}
               {props.liveStdout && (
@@ -138,8 +141,8 @@ export function BottomPanel(props: BottomPanelProps): JSX.Element {
               {!props.liveStdout && !props.liveStderr && !isRunning && (
                 <EmptyState
                   icon={<CirclePlay size={22} />}
-                  title={props.result ? '程序没有产生输出' : '点击右上角「运行」开始'}
-                  hint="stdout 与 stderr 会实时流式显示在这里，输出上限 64 KiB。"
+                  title={props.result ? t('panels.output.emptyTitleNoOutput') : t('panels.output.emptyTitleStart')}
+                  hint={t('panels.output.emptyHint')}
                 />
               )}
             </div>
@@ -148,7 +151,7 @@ export function BottomPanel(props: BottomPanelProps): JSX.Element {
           {props.activeTab === 'stdin' && (
             <div className="stdin-view">
               <div className="stdin-head">
-                <span>标准输入（stdin）</span>
+                <span>{t('panels.stdin.label')}</span>
                 <span className="muted">
                   {props.stdin.length.toLocaleString()} / {Math.floor(props.stdinLimit / 1024)} KiB
                 </span>
@@ -156,11 +159,11 @@ export function BottomPanel(props: BottomPanelProps): JSX.Element {
               <textarea
                 value={props.stdin}
                 onChange={(event) => props.onStdinChange(event.target.value)}
-                placeholder={'例如：\n5\n1 2 3 4 5'}
+                placeholder={t('panels.stdin.placeholder')}
                 spellCheck={false}
                 className="stdin-editor"
               />
-              <div className="stdin-hint">程序通过 std::cin 读取这段内容；运行时自动写入管道。</div>
+              <div className="stdin-hint">{t('panels.stdin.hint')}</div>
             </div>
           )}
 
@@ -169,8 +172,8 @@ export function BottomPanel(props: BottomPanelProps): JSX.Element {
               {props.terminalLog.length === 0 ? (
                 <EmptyState
                   icon={<SquareTerminal size={22} />}
-                  title="终端还没有记录"
-                  hint="运行或调试后，这里会显示编译命令与沙箱执行摘要。"
+                  title={t('panels.terminal.emptyTitle')}
+                  hint={t('panels.terminal.emptyHint')}
                 />
               ) : (
                 <div className="terminal-lines">
@@ -190,8 +193,8 @@ export function BottomPanel(props: BottomPanelProps): JSX.Element {
                 {props.debugLog.length === 0 ? (
                   <EmptyState
                     icon={<Bug size={22} />}
-                    title="调试控制台为空"
-                    hint="启动调试后，程序输出与调试器消息会显示在这里；暂停时可求值表达式。"
+                    title={t('panels.debug.emptyTitle')}
+                    hint={t('panels.debug.emptyHint')}
                   />
                 ) : (
                   props.debugLog.map((entry) => (
@@ -212,7 +215,9 @@ export function BottomPanel(props: BottomPanelProps): JSX.Element {
                 <input
                   value={props.debugExpression}
                   onChange={(event) => props.onDebugExpressionChange(event.target.value)}
-                  placeholder={props.debugState === 'paused' ? '在暂停时求值，例如 values.size()' : '程序暂停后可求值'}
+                  placeholder={
+                    props.debugState === 'paused' ? t('panels.debug.placeholderPaused') : t('panels.debug.placeholderIdle')
+                  }
                   disabled={props.debugState !== 'paused' || props.evaluationBusy}
                   spellCheck={false}
                 />
@@ -220,7 +225,7 @@ export function BottomPanel(props: BottomPanelProps): JSX.Element {
                   type="submit"
                   className="icon-btn small"
                   disabled={props.debugState !== 'paused' || props.evaluationBusy || !props.debugExpression.trim()}
-                  title="求值"
+                  title={t('panels.action.evaluate')}
                 >
                   {props.evaluationBusy ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
                 </button>
@@ -233,8 +238,8 @@ export function BottomPanel(props: BottomPanelProps): JSX.Element {
               {props.diagnostics.length === 0 ? (
                 <EmptyState
                   icon={<Inbox size={22} />}
-                  title="没有编译问题"
-                  hint="编译错误和警告会按文件、行号列出，点击可跳转到编辑器。"
+                  title={t('panels.problems.emptyTitle')}
+                  hint={t('panels.problems.emptyHint')}
                 />
               ) : (
                 <div className="problem-list">
@@ -251,7 +256,11 @@ export function BottomPanel(props: BottomPanelProps): JSX.Element {
                         {diagnostic.file}:{diagnostic.line}:{diagnostic.col}
                       </span>
                       <span className="problem-severity">
-                        {diagnostic.severity === 'error' ? '错误' : diagnostic.severity === 'warning' ? '警告' : '提示'}
+                        {diagnostic.severity === 'error'
+                          ? t('panels.severity.error')
+                          : diagnostic.severity === 'warning'
+                            ? t('panels.severity.warning')
+                            : t('panels.severity.note')}
                       </span>
                     </button>
                   ))}
@@ -266,6 +275,7 @@ export function BottomPanel(props: BottomPanelProps): JSX.Element {
 }
 
 function EmptyState({ icon, title, hint }: { icon: React.ReactNode; title: string; hint: string }): JSX.Element {
+  useLocale();
   return (
     <div className="empty-state">
       <span className="empty-icon">{icon}</span>

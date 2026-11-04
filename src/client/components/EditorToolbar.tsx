@@ -1,5 +1,6 @@
 import { Flag, FolderTree, SlidersHorizontal } from 'lucide-react';
 import type { CompilerCapability, CompilerId, OptId, StdId } from '../../shared/types';
+import { t, useLocale } from '../i18n';
 
 interface EditorToolbarProps {
   compilers: CompilerCapability[];
@@ -19,27 +20,27 @@ interface EditorToolbarProps {
 }
 
 export function EditorToolbar(props: EditorToolbarProps): JSX.Element {
+  useLocale();
   return (
     <div className="editor-toolbar">
       <div className="select-field">
-        <span className="select-label">编译器</span>
+        <span className="select-label">{t('chrome.toolbar.compiler')}</span>
         <select
           value={props.compiler}
           onChange={(event) => props.onCompiler(event.target.value as CompilerId)}
-          aria-label="编译器"
+          aria-label={t('chrome.toolbar.compiler')}
         >
           {props.compilers.map((compiler) => (
             <option key={compiler.id} value={compiler.id} disabled={!compiler.available}>
-              {compiler.id}
-              {compiler.available ? '' : '（未安装）'}
+              {compiler.available ? compiler.id : t('chrome.toolbar.compilerNotInstalled', { name: compiler.id })}
             </option>
           ))}
         </select>
       </div>
 
       <div className="select-field">
-        <span className="select-label">标准</span>
-        <select value={props.std} onChange={(event) => props.onStd(event.target.value as StdId)} aria-label="C++ 标准">
+        <span className="select-label">{t('chrome.toolbar.std')}</span>
+        <select value={props.std} onChange={(event) => props.onStd(event.target.value as StdId)} aria-label={t('chrome.toolbar.stdAria')}>
           {props.stds.map((std) => (
             <option key={std} value={std}>
               {std.toUpperCase()}
@@ -49,8 +50,8 @@ export function EditorToolbar(props: EditorToolbarProps): JSX.Element {
       </div>
 
       <div className="select-field">
-        <span className="select-label">优化</span>
-        <select value={props.opt} onChange={(event) => props.onOpt(event.target.value as OptId)} aria-label="优化级别">
+        <span className="select-label">{t('chrome.toolbar.opt')}</span>
+        <select value={props.opt} onChange={(event) => props.onOpt(event.target.value as OptId)} aria-label={t('chrome.toolbar.optAria')}>
           {props.opts.map((opt) => (
             <option key={opt} value={opt}>
               {opt}
@@ -61,19 +62,19 @@ export function EditorToolbar(props: EditorToolbarProps): JSX.Element {
 
       <button type="button" className={`toolbar-pill ${props.extraFlags.length ? 'has-value' : ''}`} onClick={props.onOpenFlags}>
         <SlidersHorizontal size={14} />
-        编译参数
+        {t('chrome.toolbar.flags')}
         {props.extraFlags.length > 0 && <span className="pill-badge">{props.extraFlags.length}</span>}
       </button>
 
       <span className="entry-hint">
-        <Flag size={13} /> 入口 {props.entry}
+        <Flag size={13} /> {t('chrome.toolbar.entry', { name: props.entry })}
       </span>
 
       <div className="toolbar-spacer" />
 
       <button type="button" className="toolbar-pill" onClick={props.onOpenFiles}>
         <FolderTree size={14} />
-        文件
+        {t('chrome.toolbar.files')}
       </button>
     </div>
   );

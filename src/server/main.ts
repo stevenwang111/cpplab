@@ -4,10 +4,12 @@ import http from 'node:http';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { config } from './config.js';
-import { ApiError } from './util/errors.js';
+import { ApiError, msg } from './util/errors.js';
 import { RateLimiter } from './util/rateLimiter.js';
-import { detectCapabilities } from './capabilities.js';
+import { detectCapabilities, localizeCapabilities } from './capabilities.js';
 import { ensureRootfs } from './sandbox/rootfs.js';
+import { localeMiddleware, resolveI18nText } from './locale.js';
+import { DEFAULT_LOCALE, renderText, type Locale } from '../shared/i18n/index.js';
 import {
   COMPILERS,
   OPTS,
@@ -44,11 +46,13 @@ const limiter = new RateLimiter(config.limits.rateLimitPerSecond, config.limits.
 const rateSweeper = setInterval(() => limiter.sweep(), 60_000);
 rateSweeper.unref();
 
-function projectState() {
+/** Project payload rendered in the caller's language, including seeded text. */
+function projectState(locale: Locale) {
+  const project = getProject();
   return {
-    project: getProject(),
-    files: getFiles(),
-    capabilities: capabilities!,
+    project: { ...project, name: resolveI18nText(project.name, locale) },
+    files: getFiles().map((file) => ({ ...file, content: resolveI18nText(file.content, locale) })),
+    capabilities: localizeCapabilities(capabilities!, locale),
   };
 }
 
@@ -68,7 +72,7 @@ function clientKey(req: Request): string {
 
 function enforceRate(req: Request): void {
   if (!limiter.take(clientKey(req))) {
-    throw new ApiError(429, 'RATE_LIMITED', '请求过于频繁，请稍后再试');
+    throw new ApiError(429, 'RATE_LIMITED', msg('err.rateLimited'));
   }
 }
 
@@ -80,7 +84,7 @@ async function main(): Promise<void> {
   capabilities = await detectCapabilities();
   audit({
     event: 'startup',
-    sandbox: capabilities.sandbox,
+    sandbox: localizeCapabilities(capabilities, DEFAULT_LOCALE).sandbox,
     tools: capabilities.tools,
   });
 
@@ -94,19 +98,20 @@ async function main(): Promise<void> {
     if (req.path.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
     next();
   });
+  app.use(localeMiddleware);
   app.use(express.json({ limit: config.maxBodyBytes }));
 
-  app.get('/api/health', (_req, res) => {
+  app.get('/api/health', (req, res) => {
     res.json({
       ok: true,
       serverTime: Date.now(),
-      capabilities,
+      capabilities: localizeCapabilities(capabilities!, req.locale),
       debugSessions: listDebugSessions(),
     });
   });
 
-  app.get('/api/project', (_req, res) => {
-    res.json(projectState());
+  app.get('/api/project', (req, res) => {
+    res.json(projectState(req.locale));
   });
 
   app.patch('/api/project', (req, res, next) => {
@@ -118,25 +123,25 @@ async function main(): Promise<void> {
         if (body.settings.entry !== undefined) {
           const entry = normalizeFilePath(body.settings.entry);
           if (!getFiles().some((file) => file.path === entry)) {
-            throw new ApiError(400, 'ENTRY_MISSING', `入口文件不存在：${entry}`);
+            throw new ApiError(400, 'ENTRY_MISSING', msg('err.entryMissing', { entry }));
           }
           settings.entry = entry;
         }
         if (body.settings.compiler !== undefined) {
           if (!COMPILERS.includes(body.settings.compiler as CompilerId)) {
-            throw new ApiError(400, 'INVALID_REQUEST', 'compiler 取值不合法');
+            throw new ApiError(400, 'INVALID_REQUEST', msg('err.enumInvalid', { field: 'compiler' }));
           }
           settings.compiler = body.settings.compiler as CompilerId;
         }
         if (body.settings.std !== undefined) {
           if (!STDS.includes(body.settings.std as StdId)) {
-            throw new ApiError(400, 'INVALID_REQUEST', 'std 取值不合法');
+            throw new ApiError(400, 'INVALID_REQUEST', msg('err.enumInvalid', { field: 'std' }));
           }
           settings.std = body.settings.std as StdId;
         }
         if (body.settings.opt !== undefined) {
           if (!OPTS.includes(body.settings.opt as OptId)) {
-            throw new ApiError(400, 'INVALID_REQUEST', 'opt 取值不合法');
+            throw new ApiError(400, 'INVALID_REQUEST', msg('err.enumInvalid', { field: 'opt' }));
           }
           settings.opt = body.settings.opt as OptId;
         }
@@ -144,12 +149,12 @@ async function main(): Promise<void> {
       let name: string | undefined;
       if (body.name !== undefined) {
         if (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 60) {
-          throw new ApiError(400, 'INVALID_REQUEST', '项目名长度需在 1-60 字符之间');
+          throw new ApiError(400, 'INVALID_REQUEST', msg('err.projectNameLength'));
         }
         name = body.name.trim();
       }
       const project = updateProjectSettings(settings, name);
-      res.json({ project });
+      res.json({ project: { ...project, name: resolveI18nText(project.name, req.locale) } });
     } catch (error) {
       next(error);
     }
@@ -160,14 +165,14 @@ async function main(): Promise<void> {
       const body = req.body as { path?: unknown; content?: unknown };
       const filePath = normalizeFilePath(body.path);
       if (typeof body.content !== 'string') {
-        throw new ApiError(400, 'INVALID_REQUEST', 'content 必须是字符串');
+        throw new ApiError(400, 'INVALID_REQUEST', msg('err.contentNotString'));
       }
       if (Buffer.byteLength(body.content) > config.limits.maxSourceBytes) {
-        throw new ApiError(413, 'SOURCE_TOO_LARGE', '单个文件超过大小上限');
+        throw new ApiError(413, 'SOURCE_TOO_LARGE', msg('err.fileTooLarge'));
       }
       const existing = getFiles();
       if (!existing.some((file) => file.path === filePath) && existing.length >= config.limits.maxFiles) {
-        throw new ApiError(400, 'TOO_MANY_FILES', `文件数量不能超过 ${config.limits.maxFiles} 个`);
+        throw new ApiError(400, 'TOO_MANY_FILES', msg('err.tooManyFiles', { max: config.limits.maxFiles }));
       }
       upsertFile(filePath, body.content);
       res.json({ ok: true, path: filePath });
@@ -181,13 +186,13 @@ async function main(): Promise<void> {
       const filePath = normalizeFilePath(String((req.params as Record<string, string | string[]>)[0]));
       const files = getFiles();
       if (!files.some((file) => file.path === filePath)) {
-        throw new ApiError(404, 'FILE_NOT_FOUND', '文件不存在');
+        throw new ApiError(404, 'FILE_NOT_FOUND', msg('err.fileMissing'));
       }
       if (files.length <= 1) {
-        throw new ApiError(400, 'LAST_FILE', '至少保留一个文件');
+        throw new ApiError(400, 'LAST_FILE', msg('err.lastFile'));
       }
       if (getProject().settings.entry === filePath) {
-        throw new ApiError(400, 'ENTRY_FILE', '不能删除入口文件');
+        throw new ApiError(400, 'ENTRY_FILE', msg('err.entryFile'));
       }
       deleteFile(filePath);
       res.json({ ok: true });
@@ -199,7 +204,7 @@ async function main(): Promise<void> {
   app.post('/api/format', asyncRoute(async (req, res) => {
     enforceRate(req);
     const { file, content } = validateFormatRequest(req.body);
-    const result = await formatSource(file, content);
+    const result = await formatSource(file, content, req.locale);
     res.json(result);
   }));
 
@@ -208,7 +213,7 @@ async function main(): Promise<void> {
       enforceRate(req);
       const validated = validateRunRequest(req.body);
       if (!capabilities?.compilers.some((item) => item.id === validated.compiler && item.available)) {
-        throw new ApiError(400, 'COMPILER_UNAVAILABLE', `${validated.compiler} 未安装`);
+        throw new ApiError(400, 'COMPILER_UNAVAILABLE', msg('err.compilerMissing', { compiler: validated.compiler }));
       }
       const prepared = buildPrepared({
         files: validated.files.map,
@@ -219,6 +224,7 @@ async function main(): Promise<void> {
         extraFlags: validated.extraFlags,
         stdin: validated.stdin,
         limits: validated.limits,
+        locale: req.locale,
       });
       const { runId } = startRun(prepared);
       audit({
@@ -245,7 +251,7 @@ async function main(): Promise<void> {
         return;
       }
       const stored = getRun(req.params.id);
-      if (!stored) throw new ApiError(404, 'RUN_NOT_FOUND', '运行记录不存在');
+      if (!stored) throw new ApiError(404, 'RUN_NOT_FOUND', msg('err.runNotFound'));
       res.json({ runId: stored.id, done: true, result: stored });
     } catch (error) {
       next(error);
@@ -264,7 +270,7 @@ async function main(): Promise<void> {
   app.get('/api/runs/:id', (req, res, next) => {
     try {
       const run = getRun(req.params.id);
-      if (!run) throw new ApiError(404, 'RUN_NOT_FOUND', '运行记录不存在');
+      if (!run) throw new ApiError(404, 'RUN_NOT_FOUND', msg('err.runNotFound'));
       res.json({ run });
     } catch (error) {
       next(error);
@@ -274,10 +280,10 @@ async function main(): Promise<void> {
   app.post('/api/runs/:id/restore', (req, res, next) => {
     try {
       const run = getRun(req.params.id);
-      if (!run) throw new ApiError(404, 'RUN_NOT_FOUND', '运行记录不存在');
+      if (!run) throw new ApiError(404, 'RUN_NOT_FOUND', msg('err.runNotFound'));
       const validated = validateFiles(run.files, run.source.entry);
       replaceFiles(validated.files, run.source);
-      res.json(projectState());
+      res.json(projectState(req.locale));
     } catch (error) {
       next(error);
     }
@@ -287,7 +293,7 @@ async function main(): Promise<void> {
     enforceRate(req);
     const validated = validateDebugStart(req.body);
     if (!capabilities?.compilers.some((item) => item.id === validated.compiler && item.available)) {
-      throw new ApiError(400, 'COMPILER_UNAVAILABLE', `${validated.compiler} 未安装`);
+      throw new ApiError(400, 'COMPILER_UNAVAILABLE', msg('err.compilerMissing', { compiler: validated.compiler }));
     }
     const outcome = await startDebugSession({
       files: validated.files.map,
@@ -296,6 +302,7 @@ async function main(): Promise<void> {
       compiler: validated.compiler,
       std: validated.std,
       extraFlags: validated.extraFlags,
+      locale: req.locale,
     });
     if (!outcome.ok) {
       res.json({ status: 'CE', diagnostics: outcome.diagnostics, compileOutput: outcome.compileOutput });
@@ -311,13 +318,13 @@ async function main(): Promise<void> {
 
   app.post('/api/debug/:id/stop', asyncRoute(async (req, res) => {
     const stopped = await stopDebugSession(String(req.params.id));
-    if (!stopped) throw new ApiError(404, 'SESSION_NOT_FOUND', '调试会话不存在');
+    if (!stopped) throw new ApiError(404, 'SESSION_NOT_FOUND', msg('err.debugSessionNotFound'));
     audit({ event: 'debug.stop', sessionId: String(req.params.id) });
     res.json({ ok: true });
   }));
 
   app.use('/api', (_req, _res, next) => {
-    next(new ApiError(404, 'NOT_FOUND', '接口不存在'));
+    next(new ApiError(404, 'NOT_FOUND', msg('err.apiNotFound')));
   });
 
   const clientDir = config.clientDir;
@@ -344,24 +351,28 @@ async function main(): Promise<void> {
     });
   }
 
-  app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
     if (error instanceof ApiError) {
       res.status(error.status).json({
-        error: { code: error.code, message: error.message, detail: error.detail },
+        error: {
+          code: error.code,
+          message: error.localized(req.locale),
+          detail: error.detail ? renderText(error.detail, req.locale) : undefined,
+        },
       });
       return;
     }
     if (error instanceof SyntaxError && 'status' in error && (error as { status?: number }).status === 400) {
-      res.status(400).json({ error: { code: 'INVALID_JSON', message: '请求 JSON 格式错误' } });
+      res.status(400).json({ error: { code: 'INVALID_JSON', message: renderText({ key: 'err.invalidJson' }, req.locale) } });
       return;
     }
     const status = typeof error === 'object' && error && 'status' in error ? Number((error as { status: number }).status) : 500;
     if (status === 413) {
-      res.status(413).json({ error: { code: 'BODY_TOO_LARGE', message: '请求体过大' } });
+      res.status(413).json({ error: { code: 'BODY_TOO_LARGE', message: renderText({ key: 'err.bodyTooLarge' }, req.locale) } });
       return;
     }
     console.error('[api] unhandled error', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: '服务器内部错误' } });
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: renderText({ key: 'err.internal' }, req.locale) } });
   });
 
   const server = http.createServer(app);
@@ -421,7 +432,9 @@ async function main(): Promise<void> {
   console.log(
     `[cpplab] sandbox=${capabilities.sandbox.available ? 'ready' : 'unavailable'} formatter=${capabilities.tools.formatter} debugger=${capabilities.tools.debugger}`,
   );
-  if (!capabilities.sandbox.available) console.warn(`[cpplab] sandbox: ${capabilities.sandbox.detail}`);
+  if (!capabilities.sandbox.available) {
+    console.warn(`[cpplab] sandbox: ${renderText(capabilities.sandbox.detail, DEFAULT_LOCALE)}`);
+  }
   if (!capabilities.tools.formatter) console.warn('[cpplab] clang-format is unavailable');
   if (!capabilities.tools.debugger) console.warn('[cpplab] lldb-dap is unavailable');
 

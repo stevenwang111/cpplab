@@ -9,6 +9,8 @@
     "build": "vite build && esbuild src/server/main.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/server.js",
     "start": "NODE_ENV=production node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "i18n:check": "tsx scripts/i18n-check.mts",
+    "i18n:ui": "node scripts/i18n-ui-check.cjs",
     "sandbox:setup": "bash scripts/setup-sandbox.sh",
     "test:api": "node scripts/smoke-test.mjs",
     "test": "node scripts/smoke-test.mjs"

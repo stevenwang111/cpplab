@@ -5,13 +5,28 @@ import type {
   CompilerCapability,
   CompilerId,
   OptId,
+  SandboxCapability,
   StdId,
 } from '../shared/types.js';
+import {
+  localized,
+  renderText,
+  type Locale,
+  type LocalizedText,
+} from '../shared/i18n/index.js';
+import { ApiError } from './util/errors.js';
 import { config } from './config.js';
 import { assertSandboxReady, createWorkdir, cleanupWorkdir, execLimits, runInSandbox } from './sandbox/nsjail.js';
 import { checkDevices } from './sandbox/rootfs.js';
 
-let cached: Capabilities | undefined;
+type RawSandboxCapability = Omit<SandboxCapability, 'detail'> & { detail: LocalizedText };
+
+/** Detection runs once at boot, before any language is known, so it stores keys. */
+export interface RawCapabilities extends Omit<Capabilities, 'sandbox'> {
+  sandbox: RawSandboxCapability;
+}
+
+let cached: RawCapabilities | undefined;
 
 function toolVersion(binary: string | undefined, args: string[]): string | undefined {
   if (!binary) return undefined;
@@ -33,7 +48,7 @@ function compilerCapability(id: CompilerId, binary: string | undefined, label: s
   };
 }
 
-export async function detectCapabilities(): Promise<Capabilities> {
+export async function detectCapabilities(): Promise<RawCapabilities> {
   if (cached) return cached;
 
   const sandboxError = await probeSandbox();
@@ -51,7 +66,7 @@ export async function detectCapabilities(): Promise<Capabilities> {
     sandbox: {
       driver: 'nsjail',
       available: nsjailReady && devices.ready && !sandboxError,
-      detail: sandboxError ?? (devices.ready ? 'nsjail 就绪' : devices.detail),
+      detail: sandboxError ?? (devices.ready ? localized('caps.nsjailReady') : devices.detail),
       devicesReady: devices.ready,
       version: 'nsjail',
     },
@@ -74,12 +89,21 @@ export async function detectCapabilities(): Promise<Capabilities> {
   return cached;
 }
 
+/** Render the boot-time detection result for one caller. */
+export function localizeCapabilities(raw: RawCapabilities, locale: Locale): Capabilities {
+  return {
+    ...raw,
+    sandbox: { ...raw.sandbox, detail: renderText(raw.sandbox.detail, locale) },
+  };
+}
+
 /** Smoke-test the jail once so the UI can distinguish "not set up" from a bad request. */
-async function probeSandbox(): Promise<string | undefined> {
+async function probeSandbox(): Promise<LocalizedText | undefined> {
   if (!config.sandbox.nsjailPath) {
-    return 'nsjail 未安装；请运行 npm run sandbox:setup';
+    return localized('caps.nsjailNotInstalled');
   }
-  if (!checkDevices().ready) return checkDevices().detail;
+  const devices = checkDevices();
+  if (!devices.ready) return devices.detail;
   let workdir: string | undefined;
   try {
     assertSandboxReady();
@@ -93,14 +117,17 @@ async function probeSandbox(): Promise<string | undefined> {
       timeoutMs: 3000,
       outputLimitBytes: 4096,
     });
-    if (result.spawnError) return result.spawnError;
+    if (result.spawnError) return { text: result.spawnError };
     if (result.exitCode !== 0) {
       const snippet = result.nsjailLog.split(/\r?\n/).slice(-3).join(' ').slice(0, 300);
-      return `nsjail 自检失败：${snippet || result.stderr.slice(0, 200) || '未知错误'}`;
+      const fallback = result.stderr.slice(0, 200);
+      if (snippet || fallback) return localized('caps.nsjailProbeFailed', { snippet: snippet || fallback });
+      return localized('caps.nsjailProbeFailedEmpty');
     }
     return undefined;
   } catch (error) {
-    return error instanceof Error ? error.message : String(error);
+    if (error instanceof ApiError) return error.text;
+    return { text: error instanceof Error ? error.message : String(error) };
   } finally {
     if (workdir) cleanupWorkdir(workdir);
   }

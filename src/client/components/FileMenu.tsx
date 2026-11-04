@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { FileCode2, FilePlus2, Star, Trash2, X } from 'lucide-react';
+import { t, useLocale } from '../i18n';
 
 interface FileMenuProps {
   files: string[];
@@ -13,6 +14,7 @@ interface FileMenuProps {
 }
 
 export function FileMenu(props: FileMenuProps): JSX.Element {
+  useLocale();
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -23,11 +25,11 @@ export function FileMenu(props: FileMenuProps): JSX.Element {
   }, [props.onClose]);
   return (
     <div className="popover-layer">
-      <button type="button" className="popover-backdrop" aria-label="关闭文件列表" onClick={props.onClose} />
-      <div className="file-menu" role="dialog" aria-label="文件列表">
+      <button type="button" className="popover-backdrop" aria-label={t('chrome.filemenu.backdropClose')} onClick={props.onClose} />
+      <div className="file-menu" role="dialog" aria-label={t('chrome.filemenu.label')}>
         <div className="popover-head">
-          <span>工作区文件</span>
-          <button type="button" className="icon-btn tiny" onClick={props.onClose} title="关闭">
+          <span>{t('chrome.filemenu.heading')}</span>
+          <button type="button" className="icon-btn tiny" onClick={props.onClose} title={t('common.close')}>
             <X size={14} />
           </button>
         </div>
@@ -37,14 +39,14 @@ export function FileMenu(props: FileMenuProps): JSX.Element {
               <button type="button" className="file-menu-open" onClick={() => props.onSelect(file)}>
                 <FileCode2 size={14} />
                 <span>{file}</span>
-                {file === props.entry && <span className="entry-badge">入口</span>}
+                {file === props.entry && <span className="entry-badge">{t('chrome.filemenu.entry')}</span>}
               </button>
               {file !== props.entry && (
                 <button
                   type="button"
                   className="icon-btn tiny"
                   onClick={() => props.onSetEntry(file)}
-                  title="设为入口文件"
+                  title={t('chrome.filemenu.setEntry')}
                 >
                   <Star size={13} />
                 </button>
@@ -54,7 +56,7 @@ export function FileMenu(props: FileMenuProps): JSX.Element {
                 className="icon-btn tiny"
                 onClick={() => props.onDelete(file)}
                 disabled={file === props.entry}
-                title={file === props.entry ? '入口文件不能删除' : '删除文件'}
+                title={file === props.entry ? t('chrome.filemenu.entryNoDelete') : t('chrome.filemenu.deleteFile')}
               >
                 <Trash2 size={13} />
               </button>
@@ -62,7 +64,7 @@ export function FileMenu(props: FileMenuProps): JSX.Element {
           ))}
         </div>
         <button type="button" className="file-menu-new" onClick={props.onNewFile}>
-          <FilePlus2 size={14} /> 新建文件
+          <FilePlus2 size={14} /> {t('chrome.files.newFile')}
         </button>
       </div>
     </div>

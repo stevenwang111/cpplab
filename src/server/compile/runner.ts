@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CompilerId, Diagnostic, OptId, RunStatus, StdId } from '../../shared/types.js';
+import { translate, type Locale } from '../../shared/i18n/index.js';
 import { config } from '../config.js';
-import { ApiError, SandboxUnavailableError } from '../util/errors.js';
+import { ApiError, SandboxUnavailableError, msg, raw } from '../util/errors.js';
 import {
   cleanupWorkdir,
   compileLimits,
@@ -27,6 +28,8 @@ export interface CompileInput {
   opt: OptId;
   extraFlags: string[];
   debug?: boolean;
+  /** Language for the notes appended to compiler output. */
+  locale: Locale;
 }
 
 export interface CompileSuccess {
@@ -80,11 +83,14 @@ export async function compileWorkspace(input: CompileInput): Promise<CompileOutc
 
   if (result.spawnError) {
     cleanupWorkdir(workdir);
-    throw new SandboxUnavailableError('编译沙箱启动失败', result.spawnError);
+    throw new SandboxUnavailableError(msg('run.sandbox.compileSpawnFailed'), raw(result.spawnError));
   }
   if (isSandboxFailure(result)) {
     cleanupWorkdir(workdir);
-    throw new SandboxUnavailableError('编译沙箱执行失败', summarizeSandboxFailure(result));
+    throw new SandboxUnavailableError(
+      msg('run.sandbox.compileFailed'),
+      raw(summarizeSandboxFailure(result, input.locale)),
+    );
   }
 
   const parsed = parseDiagnostics(result.stderr);
@@ -98,14 +104,15 @@ export async function compileWorkspace(input: CompileInput): Promise<CompileOutc
     };
   }
 
+  const timeoutNote = translate(input.locale, 'run.note.compileTimeout', {
+    s: config.limits.compileTimeMs / 1000,
+  });
   return {
     ok: false,
     workdir,
     compileTimeMs: result.durationMs,
     diagnostics: parsed.diagnostics,
-    compileOutput: result.timedOut
-      ? `${result.stderr}\n[编译超时：超过 ${config.limits.compileTimeMs / 1000} 秒]`.trim()
-      : result.stderr,
+    compileOutput: result.timedOut ? `${result.stderr}\n${timeoutNote}`.trim() : result.stderr,
     sandboxResult: result,
   };
 }
@@ -115,6 +122,8 @@ export interface ExecuteInput {
   memoryMb: number;
   outputBytes: number;
   stdin: string;
+  /** Language for the notes appended to program output. */
+  locale: Locale;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
 }
@@ -152,10 +161,10 @@ export async function executeCompiled(workdir: string, input: ExecuteInput): Pro
   });
 
   if (result.spawnError) {
-    throw new SandboxUnavailableError('运行沙箱启动失败', result.spawnError);
+    throw new SandboxUnavailableError(msg('run.sandbox.execSpawnFailed'), raw(result.spawnError));
   }
   if (isSandboxFailure(result)) {
-    throw new SandboxUnavailableError('运行沙箱执行失败', summarizeSandboxFailure(result));
+    throw new SandboxUnavailableError(msg('run.sandbox.execFailed'), raw(summarizeSandboxFailure(result, input.locale)));
   }
 
   const stats = readRunStats(workdir);
@@ -164,11 +173,11 @@ export async function executeCompiled(workdir: string, input: ExecuteInput): Pro
   let status = classifyRun(result, input);
 
   if (result.timedOut) {
-    stdout += `\n[运行超时：超过 ${input.timeMs} ms，进程组已终止]`;
+    stdout += `\n${translate(input.locale, 'run.note.runTimeout', { ms: input.timeMs })}`;
   } else if (result.outputExceeded) {
-    stderr += `\n[输出超过 ${(input.outputBytes / 1024).toFixed(0)} KiB，进程组已终止]`;
+    stderr += `\n${translate(input.locale, 'run.note.outputLimit', { kb: (input.outputBytes / 1024).toFixed(0) })}`;
   } else if (result.sigsys || result.signal === 31) {
-    stderr += '\n[沙箱：程序触发了被禁止的系统调用，进程被终止]';
+    stderr += `\n${translate(input.locale, 'run.note.sigsys')}`;
   }
 
   // A 128+N exit is a signal by convention when nsjail relays the status.
@@ -212,18 +221,22 @@ function isSandboxFailure(result: SandboxResult): boolean {
   return false;
 }
 
-function summarizeSandboxFailure(result: SandboxResult): string {
+function summarizeSandboxFailure(result: SandboxResult, locale: Locale): string {
   const lines = result.nsjailLog
     .split(/\r?\n/)
     .filter((line) => /error|fatal|failed|couldn/i.test(line))
     .slice(-4)
     .join('\n');
-  return lines || result.stderr.slice(0, 1000) || 'nsjail 未返回可用结果';
+  return lines || result.stderr.slice(0, 1000) || translate(locale, 'run.sandbox.noOutput');
 }
 
-export async function formatSource(file: string, content: string): Promise<{ formatted: string; changed: boolean }> {
+export async function formatSource(
+  file: string,
+  content: string,
+  locale: Locale,
+): Promise<{ formatted: string; changed: boolean }> {
   if (!config.tools.clangFormat) {
-    throw new ApiError(503, 'FORMATTER_UNAVAILABLE', 'clang-format 未安装');
+    throw new ApiError(503, 'FORMATTER_UNAVAILABLE', msg('err.formatterMissing'));
   }
   const normalized = file.replace(/^\/workspace\//, '');
   const workdir = createWorkdir();
@@ -248,10 +261,10 @@ export async function formatSource(file: string, content: string): Promise<{ for
       outputLimitBytes: config.limits.maxOutputBytes,
     });
     if (result.spawnError) {
-      throw new SandboxUnavailableError('格式化沙箱启动失败', result.spawnError);
+      throw new SandboxUnavailableError(msg('run.sandbox.formatSpawnFailed'), raw(result.spawnError));
     }
     if (result.timedOut || result.exitCode !== 0) {
-      throw new ApiError(400, 'FORMAT_FAILED', 'clang-format 执行失败', result.stderr.slice(0, 2000));
+      throw new ApiError(400, 'FORMAT_FAILED', msg('err.formatFailed'), raw(result.stderr.slice(0, 2000)));
     }
     const formatted = fs.readFileSync(path.join(workdir, ...normalized.split('/')), 'utf8');
     return { formatted, changed: formatted !== content };
@@ -259,4 +272,3 @@ export async function formatSource(file: string, content: string): Promise<{ for
     cleanupWorkdir(workdir);
   }
 }
-

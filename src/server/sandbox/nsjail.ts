@@ -4,7 +4,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { config } from '../config.js';
-import { ApiError, SandboxUnavailableError } from '../util/errors.js';
+import { ApiError, SandboxUnavailableError, msg, raw } from '../util/errors.js';
 import { checkDevices } from './rootfs.js';
 
 export type SandboxPurpose = 'compile' | 'exec' | 'debug' | 'format';
@@ -65,28 +65,22 @@ const DEV_NAMES = ['null', 'zero', 'urandom', 'random'];
 
 export function assertSandboxReady(): void {
   if (!config.sandbox.nsjailPath) {
-    throw new SandboxUnavailableError(
-      'nsjail 未安装，无法启动隔离沙箱',
-      '运行 npm run sandbox:setup 安装构建依赖，或设置 NSJAIL_PATH。',
-    );
+    throw new SandboxUnavailableError(msg('caps.nsjailMissing'), msg('caps.nsjailSetupHint'));
   }
   try {
     const stat = fs.statSync(config.sandbox.nsjailPath);
     const setuid = (stat.mode & 0o4000) !== 0;
     if (process.getuid?.() !== 0 && !setuid) {
-      throw new SandboxUnavailableError(
-        'nsjail 需要 root 或 setuid 权限',
-        '使用 sudo chown root:root 并 chmod u+s 安装 nsjail，或由 root 启动后端。',
-      );
+      throw new SandboxUnavailableError(msg('caps.nsjailPermission'), msg('caps.nsjailPermissionHint'));
     }
   } catch (error) {
     if (error instanceof SandboxUnavailableError) throw error;
-    throw new SandboxUnavailableError('无法检查 nsjail 可执行文件', String(error));
+    throw new SandboxUnavailableError(msg('caps.nsjailStatFailed'), raw(String(error)));
   }
 
   const devices = checkDevices();
   if (!devices.ready) {
-    throw new SandboxUnavailableError('沙箱设备节点未就绪', devices.detail);
+    throw new SandboxUnavailableError(msg('caps.nsjailDevicesNotReady'), devices.detail);
   }
 
   fs.mkdirSync(config.sandbox.runtimeDir, { recursive: true, mode: 0o755 });
@@ -164,7 +158,7 @@ export function writeWorkspaceFiles(workdir: string, files: Array<{ path: string
     const target = path.join(workdir, ...file.path.split('/'));
     const relative = path.relative(workdir, target);
     if (relative.startsWith('..') || path.isAbsolute(relative)) {
-      throw new ApiError(400, 'INVALID_PATH', `工作区路径越界：${file.path}`);
+      throw new ApiError(400, 'INVALID_PATH', msg('err.workspaceEscape', { path: file.path }));
     }
     fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o755 });
     fs.writeFileSync(target, file.content, { mode: 0o644, flag: 'w' });
@@ -372,7 +366,7 @@ export async function runInSandbox(options: SandboxExecuteOptions): Promise<Sand
     });
   } catch (error) {
     safeUnlink(configPath);
-    throw new SandboxUnavailableError('无法启动 nsjail', String(error));
+    throw new SandboxUnavailableError(msg('caps.nsjailStartFailed'), raw(String(error)));
   }
 
   const stdoutChunks: Buffer[] = [];
