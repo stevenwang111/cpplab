@@ -17,6 +17,8 @@
 - **图形化调试**：lldb-dap + DAP over WebSocket；行断点、当前行高亮、调用栈、懒加载变量树、
   Watch、调试控制台 REPL、继续 / 暂停 / 单步跳过 / 步入 / 步出 / 重启 / 停止。
 - **运行历史**：每次运行保存源码快照、参数、输出与状态；可恢复任意一次运行的代码。
+- **双语界面**：前后端共用一份消息目录（英文 / 中文），API 错误、运行阶段与沙箱提示和界面同语言；
+  首次访问跟随浏览器语言，随时可在「设置 → 界面语言」切换（存 `localStorage`）。
 - **隔离**：nsjail（namespaces + cgroup v2 + rlimits + seccomp）、无网络、只读根文件系统、
   每任务独立工作区、进程组回收、输出上限、并发信号量与按 IP 限流。
 
@@ -199,6 +201,14 @@ node scripts/smoke-test.mjs
 ✓ DAP breakpoint, stack, variables and program output
 ✓ SQLite history and snapshot restore
 15 checks passed.
+```
+
+本地化有两项专属检查：
+
+```bash
+npm run i18n:check          # 校验中英目录 key 与占位符一致，且 src / scripts / tests 无未翻译文案
+npm run i18n:ui             # 对着已启动的后端跑无头 Chromium：英文界面零中文、切换生效、
+                            # 刷新后语言保留（BASE_URL=http://127.0.0.1:3000 npm run i18n:ui）
 ```
 
 更多手动验收清单见 [`tests/sandbox/README.md`](tests/sandbox/README.md) 和

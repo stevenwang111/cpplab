@@ -1,26 +1,27 @@
-# 沙箱验收用例
+# Sandbox acceptance test cases
 
-自动化入口：`node scripts/smoke-test.mjs`（需要先 `npm run build`）。脚本会启动一个使用临时
-SQLite 与工作目录的后端实例，并通过公开 API 执行以下检查：
+Automated entry point: `node scripts/smoke-test.mjs` (requires `npm run build` first). The script
+starts a backend instance that uses a temporary SQLite database and working directory, then runs the
+following checks through the public API:
 
-| 用例 | 断言 |
+| Case | Assertion |
 |---|---|
-| `while(1);` | 状态 `TLE`，宿主无 `/workspace/prog` 残留进程 |
-| 编译错误 | 状态 `CE`，返回 `main.cpp` 的 error 诊断 |
-| `puts` 死循环 | 状态 `OLE`，stdout 被截断 |
-| 300 MiB 分配 | 状态 `MLE`，cgroup 峰值约 256 MiB |
-| `system("cat /etc/passwd")` | 只能看到伪造的 `sandbox:x:10000`，无宿主账户 |
-| `#include </etc/hostname>` | 编译失败（宿主路径不存在于 jail） |
-| `socket + connect(1.1.1.1:80)` | `connect=-1`，网络不可达 |
+| `while(1);` | Status `TLE`, no leftover `/workspace/prog` process on the host |
+| Compile error | Status `CE`, returns the error diagnostics for `main.cpp` |
+| `puts` infinite loop | Status `OLE`, stdout is truncated |
+| 300 MiB allocation | Status `MLE`, cgroup peak of about 256 MiB |
+| `system("cat /etc/passwd")` | Only the fake `sandbox:x:10000` is visible; no host accounts |
+| `#include </etc/hostname>` | Compilation fails (the host path does not exist in the jail) |
+| `socket + connect(1.1.1.1:80)` | `connect=-1`, network unreachable |
 | `-fplugin=/tmp/x.so` | HTTP 400 / `FLAG_NOT_ALLOWED` |
-| 多文件项目 | 两个文件一起进入工作区并编译 |
-| fork bomb / 超时 | cgroup `pids.max` 与进程组清理生效 |
+| Multi-file project | Both files land in the workspace together and compile |
+| fork bomb / timeout | cgroup `pids.max` and process-group cleanup take effect |
 
-手动附加检查：
+Additional manual checks:
 
-- `strace -f` 观察 seccomp 拒绝 `mount`、`ptrace`（普通运行）等调用。
-- `pgrep -af 'lldb-dap|nsjail|/workspace/prog'` 在会话结束 2 秒后应为空。
-- 浏览器 DevTools Network 确认没有对外网络请求。
+- Use `strace -f` to observe seccomp rejecting calls such as `mount` and `ptrace` (in a normal run).
+- `pgrep -af 'lldb-dap|nsjail|/workspace/prog'` should return nothing 2 seconds after the session ends.
+- Confirm in the browser DevTools Network tab that no outbound network requests are made.
 
-已知环境差异：Linux 允许在空网络命名空间中创建 socket，因此验收以 `connect` 失败为准；
-`seccomp` 黑名单也不拦截 `socket`。
+Known environment difference: Linux allows creating a socket inside an empty network namespace, so
+acceptance is based on `connect` failing; the `seccomp` denylist does not block `socket` either.

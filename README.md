@@ -26,6 +26,9 @@ user code (including the compile step) runs inside nsjail.
   continue / pause / step over / step into / step out / restart / stop.
 - **Run history**: every run stores a source snapshot, arguments, output, and status; any past
   run's code can be restored.
+- **Bilingual UI**: the client and the server share one message catalog (English / 中文), so API
+  errors, run phases and sandbox notes speak the same language as the interface. First visit
+  follows the browser; switch any time in Settings → Language (kept in `localStorage`).
 - **Isolation**: nsjail (namespaces + cgroup v2 + rlimits + seccomp), no network, read-only root
   filesystem, a fresh workspace per task, process-group reaping, output caps, concurrency
   semaphores, and per-IP rate limiting.
@@ -229,6 +232,16 @@ The script boots an isolated backend instance (temporary SQLite + work directori
 ✓ DAP breakpoint, stack, variables and program output
 ✓ SQLite history and snapshot restore
 15 checks passed.
+```
+
+Localization has two dedicated checks:
+
+```bash
+npm run i18n:check          # zh-CN and en catalogs share every key and placeholder, and no
+                            # untranslated text hides in src / scripts / tests
+npm run i18n:ui             # headless Chromium against a running backend: the English page
+                            # contains no Chinese, the switch flips the UI, and the choice
+                            # survives a reload (BASE_URL=http://127.0.0.1:3000 npm run i18n:ui)
 ```
 
 More manual acceptance checklists live in [`tests/sandbox/README.md`](tests/sandbox/README.md)
