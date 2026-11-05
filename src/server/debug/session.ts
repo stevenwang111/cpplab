@@ -46,9 +46,16 @@ export type DebugStartOutcome =
 class DapFrameParser {
   private buffer = Buffer.alloc(0);
   private readonly maxFrame = 8 * 1024 * 1024;
+  /** F-07: bound the accumulated buffer, not just a single frame. */
+  private readonly maxBuffer = 8 * 1024 * 1024 + 64 * 1024;
 
   push(chunk: Buffer): unknown[] {
     this.buffer = Buffer.concat([this.buffer, chunk]);
+    if (this.buffer.length > this.maxBuffer) {
+      // A hostile or broken adapter streaming header-less data must not grow
+      // the heap; the session terminates instead.
+      throw new Error('DAP frame buffer overflow');
+    }
     const messages: unknown[] = [];
     for (;;) {
       const headerEnd = this.buffer.indexOf('\r\n\r\n');
@@ -92,6 +99,7 @@ class DebugSession {
   private cleaned = false;
   private lastDbTouch = 0;
   private programOutputBytes = 0;
+  private consoleMessages = 0;
   private outputLimitHit = false;
   private readonly parser = new DapFrameParser();
   private stderrBuffer = '';
@@ -172,6 +180,11 @@ class DebugSession {
 
   private touch(): void {
     this.lastActive = Date.now();
+    // The idle timeout tracks *activity*, not session age (AGENTS.md §6.5):
+    // reschedule the timer on every touch or active sessions die at 5 minutes.
+    clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => this.expire(this.say('dbg.idleTimeout')), config.limits.debugIdleTimeoutMs);
+    this.idleTimer.unref();
     if (Date.now() - this.lastDbTouch < 5000) return;
     this.lastDbTouch = Date.now();
     try {
@@ -194,7 +207,15 @@ class DebugSession {
 
   private handleAdapterData(chunk: Buffer): void {
     this.touch();
-    const messages = this.parser.push(chunk);
+    let messages: unknown[];
+    try {
+      messages = this.parser.push(chunk);
+    } catch {
+      // F-07: unbounded adapter output is a memory DoS; drop the session.
+      this.sendConsole(this.say('dbg.adapterFlood'));
+      void this.terminate(this.say('dbg.adapterFlood'));
+      return;
+    }
     for (const message of messages) {
       if (
         !this.outputLimitHit &&
@@ -221,9 +242,14 @@ class DebugSession {
   }
 
   private handleAdapterLog(chunk: Buffer): void {
+    // F-07: the residual segment is bounded; a newline-free stream cannot grow
+    // the heap indefinitely.
     this.stderrBuffer += chunk.toString('utf8');
     const lines = this.stderrBuffer.split(/\r?\n/);
     this.stderrBuffer = lines.pop() ?? '';
+    if (this.stderrBuffer.length > 64 * 1024) {
+      this.stderrBuffer = this.stderrBuffer.slice(-64 * 1024);
+    }
     for (const line of lines) {
       if (!line.trim()) continue;
       this.sendConsole(`[lldb-dap] ${line}`);
@@ -231,6 +257,10 @@ class DebugSession {
   }
 
   private sendConsole(text: string): void {
+    // F-07: cap what is forwarded to the client so a chatty adapter cannot be
+    // used to flood the UI or the socket.
+    if (this.consoleMessages >= 4000) return;
+    this.consoleMessages += 1;
     if (this.socket && this.socket.readyState === 1) {
       this.socket.send(JSON.stringify({ type: 'ide-log', level: 'info', message: text }));
     }

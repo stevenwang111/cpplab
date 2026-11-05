@@ -16,6 +16,15 @@ fi
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
 
+# F-01: the jailed process runs as this *host* uid. It must never be the
+# service user, otherwise any sandbox escape is a service-user compromise.
+SANDBOX_UID="${SANDBOX_UID:-10000}"
+if [[ "$(id -u)" == "$SANDBOX_UID" ]]; then
+  echo "ERROR: the service uid ($(id -u)) equals SANDBOX_UID ($SANDBOX_UID)." >&2
+  echo "       The sandbox must run as a disjoint uid; export SANDBOX_UID=<other> and retry." >&2
+  exit 1
+fi
+
 echo "[1/4] Install build/debug/sandbox dependencies"
 PACKAGES=(clang clang-format lldb time dumb-init build-essential libprotobuf-dev protobuf-compiler libnl-3-dev libnl-route-3-dev libcap-dev bison flex pkg-config uidmap git)
 MISSING=()
@@ -54,16 +63,19 @@ echo "[3/4] Create sandbox device nodes"
 DEV_DIR="$ROOT/data/sandbox/dev"
 "${SUDO[@]}" mkdir -p "$DEV_DIR"
 "${SUDO[@]}" chown -R "$(id -u):$(id -g)" "$ROOT/data/sandbox"
+# Device nodes must belong to the sandbox uid: this kernel rejects
+# open(O_CREAT) on a foreign-owned device node with EACCES, and lldb's
+# process launcher opens /dev/null with O_CREAT for the debuggee's stdio.
 create_device() {
   local name="$1" major="$2" minor="$3"
   local target="$DEV_DIR/$name"
   if [[ -c "$target" ]]; then
-    "${SUDO[@]}" chown "$(id -u):$(id -g)" "$target"
+    "${SUDO[@]}" chown "${SANDBOX_UID}:${SANDBOX_GID:-10000}" "$target"
     "${SUDO[@]}" chmod 666 "$target"
     return
   fi
   "${SUDO[@]}" mknod -m 666 "$target" c "$major" "$minor"
-  "${SUDO[@]}" chown "$(id -u):$(id -g)" "$target"
+  "${SUDO[@]}" chown "${SANDBOX_UID}:${SANDBOX_GID:-10000}" "$target"
 }
 create_device null 1 3
 create_device zero 1 5
@@ -83,3 +95,4 @@ done
 mkdir -p "$ROOT/data/runtime/logs" "$ROOT/data/sandbox/rootfs"
 echo "Done. After starting the backend, open http://127.0.0.1:3000 (or http://127.0.0.1:5173 in development mode)."
 echo "Note: nsjail is installed setuid root; only use it on a local single-user / intranet setup."
+echo "Note: the sandbox runs as host uid ${SANDBOX_UID} (SANDBOX_UID), disjoint from the service user."

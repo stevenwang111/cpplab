@@ -78,6 +78,16 @@ export function assertSandboxReady(): void {
     throw new SandboxUnavailableError(msg('caps.nsjailStatFailed'), raw(String(error)));
   }
 
+  // F-01: the sandbox identity must be disjoint from the service user, else a
+  // file-system escape is immediately a service-user compromise.
+  const serviceUid = process.getuid?.();
+  if (serviceUid !== undefined && serviceUid === config.sandbox.uid) {
+    throw new SandboxUnavailableError(
+      msg('caps.nsjailPermission'),
+      raw(`SANDBOX_UID (${config.sandbox.uid}) must differ from the service uid (${serviceUid})`),
+    );
+  }
+
   const devices = checkDevices();
   if (!devices.ready) {
     throw new SandboxUnavailableError(msg('caps.nsjailDevicesNotReady'), devices.detail);
@@ -161,7 +171,18 @@ export function writeWorkspaceFiles(workdir: string, files: Array<{ path: string
       throw new ApiError(400, 'INVALID_PATH', msg('err.workspaceEscape', { path: file.path }));
     }
     fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o755 });
-    fs.writeFileSync(target, file.content, { mode: 0o644, flag: 'w' });
+    // Defense-in-depth: never follow a symlink out of the workdir, even though
+    // the directory is freshly created and currently empty.
+    const fd = fs.openSync(
+      target,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW,
+      0o644,
+    );
+    try {
+      fs.writeFileSync(fd, file.content);
+    } finally {
+      fs.closeSync(fd);
+    }
   }
 }
 
@@ -197,12 +218,20 @@ function materializeConfig(purpose: SandboxPurpose, limits: SandboxLimits): stri
 }
 
 function buildArgs(configPath: string, workdir: string, logPath: string, argv: string[]): string[] {
+  // NOTE: options placed before --config are reset when the config file is
+  // parsed, so every flag must come after --config.
+  //
+  // No --rw: the chroot rootfs is mounted read-only (F-02).
+  // --disable_clone_newuser: with a setuid-root nsjail the user namespace would
+  // map the sandbox uid onto the service user on the host (F-01). Dropping the
+  // user namespace makes --user/--group the *real* host uid/gid, which is a
+  // dedicated non-service identity.
   return [
-    '--experimental_mnt',
-    'old',
-    '--rw',
     '--config',
     configPath,
+    '--experimental_mnt',
+    'old',
+    '--disable_clone_newuser',
     '--chroot',
     config.sandbox.rootfsDir,
     '--bindmount',
@@ -210,9 +239,9 @@ function buildArgs(configPath: string, workdir: string, logPath: string, argv: s
     '--cwd',
     '/workspace',
     '--user',
-    '10000',
+    String(config.sandbox.uid),
     '--group',
-    '10000',
+    String(config.sandbox.gid),
     '--log',
     logPath,
     '--',
@@ -343,6 +372,29 @@ function signalNumber(signal: NodeJS.Signals): number {
 }
 
 /**
+ * Fork nsjail with umask 0 so every file the sandboxed uid creates in the
+ * workdir is world-writable. The workdir is afterwards removed by the service
+ * user; with a normal umask the sandbox uid would create 0755 nested
+ * directories the host cannot delete into (disk leak).
+ */
+function spawnSandbox(args: string[]): ChildProcess {
+  const previousUmask = process.umask(0);
+  try {
+    return spawn(config.sandbox.nsjailPath!, args, {
+      cwd: config.projectRoot,
+      detached: true,
+      env: {
+        PATH: '/usr/local/bin:/usr/bin:/bin',
+        HOME: '/tmp',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } finally {
+    process.umask(previousUmask);
+  }
+}
+
+/**
  * Run a command inside a throwaway jail. Output is capped in the parent; when
  * either limit trips the whole process tree is terminated.
  */
@@ -355,15 +407,7 @@ export async function runInSandbox(options: SandboxExecuteOptions): Promise<Sand
 
   let child: ChildProcess;
   try {
-    child = spawn(config.sandbox.nsjailPath!, args, {
-      cwd: config.projectRoot,
-      detached: true,
-      env: {
-        PATH: '/usr/local/bin:/usr/bin:/bin',
-        HOME: '/tmp',
-      },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    child = spawnSandbox(args);
   } catch (error) {
     safeUnlink(configPath);
     throw new SandboxUnavailableError(msg('caps.nsjailStartFailed'), raw(String(error)));
@@ -483,15 +527,7 @@ export function startDebugSandbox(workdir: string, argv: string[]): DebugSandbox
   const logPath = path.join(config.sandbox.logDir, `debug-${randomUUID()}.log`);
   const args = buildArgs(configPath, workdir, logPath, argv);
 
-  const child = spawn(config.sandbox.nsjailPath!, args, {
-    cwd: config.projectRoot,
-    detached: true,
-    env: {
-      PATH: '/usr/local/bin:/usr/bin:/bin',
-      HOME: '/tmp',
-    },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  const child = spawnSandbox(args);
 
   child.on('error', () => {
     // The session layer observes the close event and reports the failure.
@@ -516,10 +552,18 @@ export function terminateDebugSandbox(handle: DebugSandboxHandle): void {
 export function readRunStats(workdir: string): { memoryKb: number; cpuMs: number } {
   const statsPath = path.join(workdir, '.runstat');
   try {
-    // The file is created inside an untrusted workspace. O_NOFOLLOW keeps a
-    // crafted symlink from redirecting the read at a host path.
-    const fd = fs.openSync(statsPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    // The file is created inside an untrusted workspace and can be replaced by
+    // anything the sandboxed program leaves behind. O_NOFOLLOW blocks crafted
+    // symlinks, O_NONBLOCK keeps a FIFO from blocking the Node event loop
+    // forever (F-05), and the fstat check rejects directories, devices and
+    // oversized files before a single byte is read.
+    const fd = fs.openSync(
+      statsPath,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+    );
     try {
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile() || stat.size > 4096) return { memoryKb: 0, cpuMs: 0 };
       const buffer = Buffer.alloc(128);
       const length = fs.readSync(fd, buffer, 0, buffer.length, 0);
       const fields = buffer.subarray(0, length).toString('utf8').trim().split(/\s+/);

@@ -1,5 +1,3 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import type { CompilerId, Diagnostic, OptId, RunStatus, StdId } from '../../shared/types.js';
 import { translate, type Locale } from '../../shared/i18n/index.js';
 import { config } from '../config.js';
@@ -246,27 +244,29 @@ export async function formatSource(
       '{BasedOnStyle: Google, IndentWidth: 4, TabWidth: 4, UseTab: Never, ColumnLimit: 100, ' +
       'AccessModifierOffset: -4, AllowShortFunctionsOnASingleLine: Empty, BreakBeforeBraces: Attach, ' +
       'PointerAlignment: Left, SortIncludes: true}';
+    // F-04: clang-format reads the source from stdin and writes the result to
+    // stdout. The host never reads back a file from the (sandbox-writable)
+    // workdir, so a swapped-in symlink cannot redirect the read at host files.
     const result = await runInSandbox({
       purpose: 'format',
       workdir,
       argv: withInit([
         config.tools.clangFormat,
-        '-i',
         `-style=${style}`,
         `-assume-filename=/workspace/${normalized}`,
-        `/workspace/${normalized}`,
       ]),
       limits: formatLimits(),
       timeoutMs: 8_000,
-      outputLimitBytes: config.limits.maxOutputBytes,
+      stdin: content,
+      outputLimitBytes: config.limits.maxCompileOutputBytes,
     });
     if (result.spawnError) {
       throw new SandboxUnavailableError(msg('run.sandbox.formatSpawnFailed'), raw(result.spawnError));
     }
-    if (result.timedOut || result.exitCode !== 0) {
+    if (result.timedOut || result.outputExceeded || result.exitCode !== 0) {
       throw new ApiError(400, 'FORMAT_FAILED', msg('err.formatFailed'), raw(result.stderr.slice(0, 2000)));
     }
-    const formatted = fs.readFileSync(path.join(workdir, ...normalized.split('/')), 'utf8');
+    const formatted = result.stdout;
     return { formatted, changed: formatted !== content };
   } finally {
     cleanupWorkdir(workdir);

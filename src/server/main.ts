@@ -70,6 +70,31 @@ function clientKey(req: Request): string {
   return req.ip ?? req.socket.remoteAddress ?? 'unknown';
 }
 
+/** F-07: session listings are only shown to loopback clients. */
+function isLoopback(req: Request): boolean {
+  const ip = req.socket.remoteAddress ?? '';
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || ip.startsWith('127.');
+}
+
+/**
+ * F-07: reject cross-origin WebSocket upgrades. Browsers always send an Origin
+ * header on WS upgrades; a remote page must not attach to local sessions.
+ * Same-host origins (any port, e.g. the vite dev proxy) are accepted.
+ */
+function originAllowed(origin: string | undefined, host: string | undefined): boolean {
+  if (!origin) return true; // Non-browser clients (tests, CLI) send no Origin.
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  const hostname = parsed.hostname;
+  const loopback = hostname === '127.0.0.1' || hostname === '::1' || hostname === 'localhost';
+  return loopback || parsed.host === host;
+}
+
 function enforceRate(req: Request): void {
   if (!limiter.take(clientKey(req))) {
     throw new ApiError(429, 'RATE_LIMITED', msg('err.rateLimited'));
@@ -106,7 +131,7 @@ async function main(): Promise<void> {
       ok: true,
       serverTime: Date.now(),
       capabilities: localizeCapabilities(capabilities!, req.locale),
-      debugSessions: listDebugSessions(),
+      debugSessions: isLoopback(req) ? listDebugSessions() : [],
     });
   });
 
@@ -312,8 +337,9 @@ async function main(): Promise<void> {
     res.status(201).json(outcome.response);
   }));
 
-  app.get('/api/debug', (_req, res) => {
-    res.json({ sessions: listDebugSessions() });
+  // F-07: session ids are attach credentials; only expose them to loopback.
+  app.get('/api/debug', (req, res) => {
+    res.json({ sessions: isLoopback(req) ? listDebugSessions() : [] });
   });
 
   app.post('/api/debug/:id/stop', asyncRoute(async (req, res) => {
@@ -379,6 +405,13 @@ async function main(): Promise<void> {
   const wss = new WebSocketServer({ noServer: true });
 
   server.on('upgrade', (req, socket, head) => {
+    // F-07: cross-origin pages must not attach to run/debug sessions.
+    const originHeader = req.headers.origin;
+    const origin = Array.isArray(originHeader) ? originHeader[0] : originHeader;
+    if (!originAllowed(origin, req.headers.host)) {
+      socket.destroy();
+      return;
+    }
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const runMatch = /^\/ws\/run\/([0-9a-f-]+)$/i.exec(url.pathname);
     const debugMatch = /^\/ws\/debug\/([0-9a-f-]+)$/i.exec(url.pathname);

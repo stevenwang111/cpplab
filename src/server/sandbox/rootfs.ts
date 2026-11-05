@@ -7,21 +7,55 @@ const DEVICE_NAMES = ['null', 'zero', 'urandom', 'random'] as const;
 
 const FAKE_PASSWD = [
   'root:x:0:0:root:/root:/bin/sh',
-  'sandbox:x:10000:10000:Sandbox:/workspace:/bin/sh',
+  `sandbox:x:${config.sandbox.uid}:${config.sandbox.gid}:Sandbox:/workspace:/bin/sh`,
   '',
 ].join('\n');
 
-const FAKE_GROUP = ['root:x:0:', 'sandbox:x:10000:', ''].join('\n');
+const FAKE_GROUP = ['root:x:0:', `sandbox:x:${config.sandbox.gid}:`, ''].join('\n');
 
 /**
  * Build the minimal, read-only root filesystem shared by every jail. Only
- * /workspace and the tmpfs mounts are writable; the directory modes enforce
- * that even though nsjail itself runs with namespace root.
+ * /workspace and the tmpfs mounts are writable. The chroot is mounted read-only
+ * (no --rw) and the tree is owned by the service user while the sandbox runs as
+ * a disjoint uid, so the permission modes are defense-in-depth only.
  */
 export function ensureRootfs(): void {
   const root = config.sandbox.rootfsDir;
   fs.mkdirSync(root, { recursive: true, mode: 0o755 });
   makeWritable(root);
+
+  // F-06: drop any symlink planted at a managed location before a single
+  // write or chmod can traverse it. Top-level entries first: removing a
+  // symlinked parent makes the nested paths disappear with it.
+  const managedPaths = [
+    'usr',
+    'etc',
+    'dev',
+    'proc',
+    'tmp',
+    'workspace',
+    'run',
+    'dev/pts',
+    'dev/shm',
+    'etc/ld.so.conf.d',
+    'etc/passwd',
+    'etc/group',
+    'etc/nsswitch.conf',
+    'etc/hosts',
+    'etc/resolv.conf',
+    'etc/ld.so.cache',
+    'etc/ld.so.conf',
+    'etc/localtime',
+  ];
+  for (const relative of managedPaths) {
+    try {
+      if (fs.lstatSync(path.join(root, relative)).isSymbolicLink()) {
+        fs.unlinkSync(path.join(root, relative));
+      }
+    } catch {
+      // Not present; it is created below.
+    }
+  }
 
   for (const dir of ['usr', 'etc', 'dev', 'dev/pts', 'dev/shm', 'proc', 'tmp', 'workspace', 'run']) {
     fs.mkdirSync(path.join(root, dir), { recursive: true, mode: 0o755 });
@@ -45,13 +79,13 @@ export function ensureRootfs(): void {
   // The rootfs is shared by every jail and must not be mutated by sandboxed
   // processes. The bind mounts remain independent of these modes.
   for (const dir of ['etc', 'etc/ld.so.conf.d', 'dev', 'dev/pts', 'dev/shm', 'proc', 'tmp', 'usr', 'run']) {
-    fs.chmodSync(path.join(root, dir), 0o555);
+    chmodManaged(path.join(root, dir), 0o555);
   }
   for (const file of ['passwd', 'group', 'nsswitch.conf', 'hosts', 'resolv.conf', 'ld.so.cache', 'ld.so.conf', 'localtime']) {
-    fs.chmodSync(path.join(root, 'etc', file), 0o444);
+    chmodManaged(path.join(root, 'etc', file), 0o444);
   }
-  fs.chmodSync(root, 0o555);
-  fs.chmodSync(path.join(root, 'workspace'), 0o777);
+  chmodManaged(root, 0o555);
+  chmodManaged(path.join(root, 'workspace'), 0o777);
 }
 
 function makeWritable(root: string): void {
@@ -95,11 +129,37 @@ function ensureSymlink(linkPath: string, target: string): void {
 
 function writeIfDifferent(filePath: string, content: string): void {
   try {
-    if (fs.readFileSync(filePath, 'utf8') === content) return;
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink()) {
+      // F-06: never follow an attacker-planted link into host territory.
+      fs.unlinkSync(filePath);
+    } else {
+      if (stat.isFile() && fs.readFileSync(filePath, 'utf8') === content) return;
+    }
   } catch {
     // The file does not exist yet.
   }
-  fs.writeFileSync(filePath, content, { mode: 0o444 });
+  const fd = fs.openSync(
+    filePath,
+    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW,
+    0o444,
+  );
+  try {
+    fs.writeFileSync(fd, content);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** chmod that refuses to follow symbolic links (F-06). */
+function chmodManaged(target: string, mode: number): void {
+  const stat = fs.lstatSync(target);
+  if (stat.isSymbolicLink()) {
+    // A symlink here is foreign material; drop it rather than chmod its target.
+    fs.unlinkSync(target);
+    return;
+  }
+  fs.chmodSync(target, mode);
 }
 
 export interface DeviceStatus {
@@ -111,9 +171,9 @@ export interface DeviceStatus {
 
 /**
  * Device nodes are created once by scripts/setup-sandbox.sh. They live on the
- * host filesystem rather than /dev so their ownership can be mapped into the
- * sandbox user namespace; opening a foreign-owned device with O_CREAT fails on
- * this kernel.
+ * host filesystem rather than /dev and are owned by the sandbox uid: this
+ * kernel rejects open(O_CREAT) on a foreign-owned device node with EACCES,
+ * and lldb's launcher opens /dev/null with O_CREAT for the debuggee's stdio.
  */
 export function checkDevices(): DeviceStatus {
   const missing: string[] = [];

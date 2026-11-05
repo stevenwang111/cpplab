@@ -90,6 +90,7 @@ const zhCN = {
   'dbg.outputLimit': '程序输出超过 {limit}，调试会话已终止',
   'dbg.outputLimitReason': '程序输出超过上限',
   'dbg.adapterExited': '调试适配器已退出',
+  'dbg.adapterFlood': '调试适配器输出超出内部缓冲上限，会话已终止',
   'dbg.sessionStopped': '会话已停止',
   'dbg.serverShutdown': '服务器关闭',
 
@@ -196,6 +197,7 @@ const en: Record<keyof typeof zhCN, string> = {
   'dbg.outputLimit': 'Program output exceeded {limit}; the debug session was terminated',
   'dbg.outputLimitReason': 'Program output exceeded the limit',
   'dbg.adapterExited': 'The debug adapter exited',
+  'dbg.adapterFlood': 'The debug adapter exceeded the internal buffer limit; the session was terminated',
   'dbg.sessionStopped': 'Session stopped',
   'dbg.serverShutdown': 'Server shutting down',
 
