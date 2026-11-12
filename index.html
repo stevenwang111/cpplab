@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="light" />
     <meta name="theme-color" content="#ffffff" />
     <title>CppLab · 在线 C++ IDE</title>
-    <meta name="description" content="在线 C++ 编辑、编译、运行与图形化调试" />
+    <meta name="description" content="在浏览器里编辑、编译、运行 C++，编译器本身也是 WebAssembly" />
     <script>
       // Apply the stored language before the bundle paints, so the tab title and
       // description never flash in the wrong language. Messages duplicated here
@@ -25,8 +25,8 @@
           meta.setAttribute(
             'content',
             lang === 'zh-CN'
-              ? '在线 C++ 编辑、编译、运行与图形化调试'
-              : 'Edit, compile, run and debug C++ in your browser',
+              ? '在浏览器里编辑、编译、运行 C++，编译器本身也是 WebAssembly'
+              : 'Edit, compile and run C++ in your browser — the compiler is WebAssembly too',
           );
         }
       })();

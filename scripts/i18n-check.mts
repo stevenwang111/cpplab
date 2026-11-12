@@ -6,9 +6,8 @@
  *   2. the zh-CN and en catalogs disagree on keys or on {placeholder} sets,
  *   3. the same message key is declared by two different slices.
  *
- * Exemptions are deliberate: the zh-CN catalogs hold the source strings, the
- * legacy seed migration still carries the old text it rewrites, and index.html
- * keeps a small pre-paint fallback for the tab title.
+ * Exemptions are deliberate: the zh-CN catalogs hold the source strings and
+ * index.html keeps a small pre-paint fallback for the tab title.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -20,14 +19,13 @@ const CJK = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff66-\uff9f]
 
 const EXEMPT_PATHS = [
   path.join('src', 'shared', 'i18n', 'messages'),
-  path.join('src', 'server', 'i18nMigration.ts'),
   path.join('scripts', 'i18n-check.mts'),
   'index.html',
 ];
 const EXEMPT_LINE = 'i18n-allowed';
 
 const SCAN_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.mjs', '.md', '.sh', '.html']);
-const SCAN_ROOTS = ['src', 'scripts', 'tests'];
+const SCAN_ROOTS = ['src', 'scripts'];
 
 const errors: string[] = [];
 

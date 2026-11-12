@@ -1,29 +1,20 @@
 import {
-  Bug,
   ChevronDown,
   ChevronUp,
   CirclePlay,
   Inbox,
   Keyboard,
   Loader2,
-  Send,
   SquareTerminal,
   Trash2,
   TriangleAlert,
 } from 'lucide-react';
 import type { Diagnostic, RunPhase, RunResult } from '../../shared/types';
 import type { MessageKey } from '../../shared/i18n';
-import type { DebugState } from '../debug/dapClient';
 import { t, useLocale } from '../i18n';
 import { formatDuration, formatMemory, statusClass, statusLabel } from '../utils/format';
 
-export type BottomTab = 'output' | 'stdin' | 'terminal' | 'debug' | 'problems';
-
-export interface DebugLogEntry {
-  id: number;
-  kind: 'stdout' | 'stderr' | 'console' | 'system' | 'repl' | 'error';
-  text: string;
-}
+export type BottomTab = 'output' | 'stdin' | 'terminal' | 'problems';
 
 interface BottomPanelProps {
   activeTab: BottomTab;
@@ -40,12 +31,6 @@ interface BottomPanelProps {
   onStdinChange: (value: string) => void;
   stdinLimit: number;
   terminalLog: string[];
-  debugLog: DebugLogEntry[];
-  debugState: DebugState;
-  debugExpression: string;
-  onDebugExpressionChange: (value: string) => void;
-  onEvaluate: () => void;
-  evaluationBusy: boolean;
   onProblemClick: (diagnostic: Diagnostic) => void;
   onClearOutput: () => void;
 }
@@ -54,7 +39,6 @@ const TABS: Array<{ id: BottomTab; labelKey: MessageKey; icon: typeof CirclePlay
   { id: 'output', labelKey: 'panels.tab.output', icon: CirclePlay },
   { id: 'stdin', labelKey: 'panels.tab.stdin', icon: Keyboard },
   { id: 'terminal', labelKey: 'panels.tab.terminal', icon: SquareTerminal },
-  { id: 'debug', labelKey: 'panels.tab.debug', icon: Bug },
   { id: 'problems', labelKey: 'panels.tab.problems', icon: TriangleAlert },
 ];
 
@@ -79,11 +63,12 @@ export function BottomPanel(props: BottomPanelProps): JSX.Element {
                 <Icon size={14} />
                 {t(tab.labelKey)}
                 {tab.id === 'problems' && problemCount > 0 && (
-                  <span className={`tab-badge ${props.diagnostics.some((item) => item.severity === 'error') ? 'error' : ''}`}>
+                  <span
+                    className={`tab-badge ${props.diagnostics.some((item) => item.severity === 'error') ? 'error' : ''}`}
+                  >
                     {problemCount}
                   </span>
                 )}
-                {tab.id === 'debug' && props.debugState === 'paused' && <span className="tab-live-dot" />}
               </button>
             );
           })}
@@ -184,52 +169,6 @@ export function BottomPanel(props: BottomPanelProps): JSX.Element {
                   ))}
                 </div>
               )}
-            </div>
-          )}
-
-          {props.activeTab === 'debug' && (
-            <div className="debug-console">
-              <div className="debug-console-log">
-                {props.debugLog.length === 0 ? (
-                  <EmptyState
-                    icon={<Bug size={22} />}
-                    title={t('panels.debug.emptyTitle')}
-                    hint={t('panels.debug.emptyHint')}
-                  />
-                ) : (
-                  props.debugLog.map((entry) => (
-                    <pre key={entry.id} className={`debug-log-line ${entry.kind}`}>
-                      {entry.text}
-                    </pre>
-                  ))
-                )}
-              </div>
-              <form
-                className="debug-repl"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  props.onEvaluate();
-                }}
-              >
-                <span className="repl-prompt">›</span>
-                <input
-                  value={props.debugExpression}
-                  onChange={(event) => props.onDebugExpressionChange(event.target.value)}
-                  placeholder={
-                    props.debugState === 'paused' ? t('panels.debug.placeholderPaused') : t('panels.debug.placeholderIdle')
-                  }
-                  disabled={props.debugState !== 'paused' || props.evaluationBusy}
-                  spellCheck={false}
-                />
-                <button
-                  type="submit"
-                  className="icon-btn small"
-                  disabled={props.debugState !== 'paused' || props.evaluationBusy || !props.debugExpression.trim()}
-                  title={t('panels.action.evaluate')}
-                >
-                  {props.evaluationBusy ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
-                </button>
-              </form>
             </div>
           )}
 

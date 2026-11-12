@@ -1,37 +1,30 @@
 {
   "name": "cpplab-online-ide",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Online C++ IDE with sandboxed compile/run and graphical debugging",
+  "description": "Client-only C++ IDE: clang compiled to WebAssembly, running in a worker",
   "scripts": {
-    "dev": "concurrently -k -n server,web -c yellow,cyan \"tsx watch src/server/main.ts\" \"vite --port 5173\"",
-    "build": "vite build && esbuild src/server/main.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/server.js",
-    "start": "NODE_ENV=production node dist/server.js",
+    "dev": "vite --port 5173",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "start": "vite preview --port 4173",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "i18n:check": "tsx scripts/i18n-check.mts",
-    "i18n:ui": "node scripts/i18n-ui-check.cjs",
-    "sandbox:setup": "bash scripts/setup-sandbox.sh",
-    "test:api": "node scripts/smoke-test.mjs",
-    "test": "node scripts/smoke-test.mjs"
+    "i18n:ui": "node scripts/i18n-ui-check.cjs"
   },
   "dependencies": {
-    "express": "^4.21.2",
+    "@gameguild/emception-browser": "4.5.2",
+    "emception": "4.5.2",
     "lucide-react": "^0.468.0",
     "monaco-editor": "^0.52.2",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "ws": "^8.18.0"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "@types/express": "^5.0.0",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@types/ws": "^8.5.13",
     "@vitejs/plugin-react": "^4.3.4",
-    "concurrently": "^9.1.0",
-    "esbuild": "^0.24.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite": "^6.0.3"

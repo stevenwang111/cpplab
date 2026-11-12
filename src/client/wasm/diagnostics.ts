@@ -1,4 +1,11 @@
-import type { Diagnostic } from '../../shared/types.js';
+/**
+ * clang diagnostic parsing.
+ *
+ * The compiler runs inside the worker with `<workspace>` as its root, so the
+ * absolute paths it reports map straight back to editor model paths.
+ */
+import type { Diagnostic } from '../../shared/types';
+import { WORKSPACE_ROOT } from './constants';
 
 const DIAGNOSTIC_RE = /^([^:\s]+):(\d+)(?::(\d+))?:\s+(fatal error|error|warning|note):\s+(.*)$/;
 
@@ -8,11 +15,6 @@ export interface ParsedDiagnostics {
   errors: number;
 }
 
-/**
- * Convert g++/clang++ diagnostics to editor markers. The compiler runs with
- * `/workspace` as its root, so the reported absolute paths map directly to the
- * Monaco model paths used by the client.
- */
 export function parseDiagnostics(compilerStderr: string): ParsedDiagnostics {
   const diagnostics: Diagnostic[] = [];
   const seen = new Set<string>();
@@ -36,16 +38,10 @@ export function parseDiagnostics(compilerStderr: string): ParsedDiagnostics {
     if (seen.has(key)) continue;
     seen.add(key);
 
-    const normalizedSeverity = severity === 'fatal error' ? 'error' : (severity as Diagnostic['severity']);
-    diagnostics.push({
-      file,
-      line: lineNumber,
-      col,
-      severity: normalizedSeverity,
-      message,
-    });
-    if (normalizedSeverity === 'error') errors += 1;
-    if (normalizedSeverity === 'warning') warnings += 1;
+    const normalized = severity === 'fatal error' ? 'error' : (severity as Diagnostic['severity']);
+    diagnostics.push({ file, line: lineNumber, col, severity: normalized, message });
+    if (normalized === 'error') errors += 1;
+    if (normalized === 'warning') warnings += 1;
   }
 
   return { diagnostics, warnings, errors };
@@ -54,9 +50,9 @@ export function parseDiagnostics(compilerStderr: string): ParsedDiagnostics {
 function normalizeDiagnosticFile(raw: string): string | null {
   if (!raw || raw === '<stdin>') return null;
   let value = raw.replace(/\\/g, '/');
-  if (value.startsWith('/workspace/')) value = value.slice('/workspace/'.length);
+  if (value.startsWith(`${WORKSPACE_ROOT}/`)) value = value.slice(WORKSPACE_ROOT.length + 1);
   if (value.startsWith('/')) {
-    // System headers are useful context but cannot be opened in the editor.
+    // Sysroot headers are useful context but cannot be opened in the editor.
     if (value.startsWith('/usr/')) return null;
     value = value.slice(value.lastIndexOf('/') + 1);
   }

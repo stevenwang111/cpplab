@@ -9,7 +9,7 @@
 
 const zhCN = {
   'meta.title': 'CppLab · 在线 C++ IDE',
-  'meta.description': '在线 C++ 编辑、编译、运行与图形化调试',
+  'meta.description': '在浏览器里编辑、编译、运行 C++，编译器本身也是 WebAssembly',
   'common.close': '关闭',
   'common.cancel': '取消',
   'common.save': '保存',
@@ -27,7 +27,7 @@ const zhCN = {
 
 const en: Record<keyof typeof zhCN, string> = {
   'meta.title': 'CppLab · Online C++ IDE',
-  'meta.description': 'Edit, compile, run and debug C++ in your browser',
+  'meta.description': 'Edit, compile and run C++ in your browser — the compiler is WebAssembly too',
   'common.close': 'Close',
   'common.cancel': 'Cancel',
   'common.save': 'Save',

@@ -11,13 +11,12 @@ import type {
   RunResult,
   StdId,
 } from '../shared/types';
-import { api, wsUrl } from './api';
+import { api } from './api';
 import { TopBar } from './components/TopBar';
 import { EditorToolbar } from './components/EditorToolbar';
 import { FileTabs } from './components/FileTabs';
-import { CodeEditor, type EditorBreakpoint, type EditorSettings } from './components/CodeEditor';
-import { BottomPanel, type BottomTab, type DebugLogEntry } from './components/BottomPanel';
-import { DebugPanel, type DebugTab, type WatchExpression } from './components/DebugPanel';
+import { CodeEditor, type EditorSettings } from './components/CodeEditor';
+import { BottomPanel, type BottomTab } from './components/BottomPanel';
 import { StatusBar } from './components/StatusBar';
 import { HistoryDrawer } from './components/HistoryDrawer';
 import { SettingsPopover } from './components/SettingsPopover';
@@ -28,7 +27,9 @@ import { ToastStack } from './components/ToastStack';
 import { useResizable } from './hooks/useResizable';
 import { useToast } from './hooks/useToast';
 import { getLocale, t, useLocale } from './i18n';
-import { DapClient, type DapBreakpoint, type DapHandlers, type DapScope, type DapStackFrame, type DapVariable, type DebugState } from './debug/dapClient';
+import { warmup } from './wasm/toolchain';
+import { ensureCrossOriginIsolation } from './wasm/isolation';
+import { TOOLCHAIN_MIN_DOWNLOAD_MB } from './wasm/constants';
 
 type SaveState = 'saved' | 'saving' | 'dirty' | 'error';
 
@@ -71,7 +72,7 @@ export default function App(): JSX.Element {
   const [openTabs, setOpenTabs] = useState<string[]>([]);
   const [activeFile, setActiveFile] = useState('');
   const [entry, setEntry] = useState('main.cpp');
-  const [compiler, setCompiler] = useState<CompilerId>('g++');
+  const [compiler, setCompiler] = useState<CompilerId>('clang++');
   const [std, setStd] = useState<StdId>('c++20');
   const [opt, setOpt] = useState<OptId>('-O0');
   const [extraFlags, setExtraFlags] = useState<string[]>(() => readJson('cpplab.flags', []));
@@ -92,30 +93,6 @@ export default function App(): JSX.Element {
   const [stdin, setStdin] = useState<string>(() => readString('cpplab.stdin'));
   const [runLimits, setRunLimits] = useState<RunLimits>(() => readJson('cpplab.runLimits', { timeMs: 2000, memoryMb: 256 }));
 
-  const [debugState, setDebugState] = useState<DebugState>('idle');
-  const [debugSession, setDebugSession] = useState<{ sessionId: string; program: string; cwd: string } | null>(null);
-  const [debugThreadId, setDebugThreadId] = useState<number | null>(null);
-  const [debugTab, setDebugTab] = useState<DebugTab>('stack');
-  const [frames, setFrames] = useState<DapStackFrame[]>([]);
-  const [selectedFrameId, setSelectedFrameId] = useState<number | null>(null);
-  const [scopes, setScopes] = useState<DapScope[]>([]);
-  const [variables, setVariables] = useState<Record<number, DapVariable[]>>({});
-  const [expandedVars, setExpandedVars] = useState<Set<number>>(new Set());
-  const [loadingRefs, setLoadingRefs] = useState<Set<number>>(new Set());
-  const [watches, setWatches] = useState<WatchExpression[]>(() =>
-    readJson<string[]>('cpplab.watches', []).map((expression) => ({ expression })),
-  );
-  const [watchInput, setWatchInput] = useState('');
-  const [currentLine, setCurrentLine] = useState<{ file: string; line: number } | null>(null);
-  const [debugLog, setDebugLog] = useState<DebugLogEntry[]>([]);
-  const [debugExpression, setDebugExpression] = useState('');
-  const [evaluationBusy, setEvaluationBusy] = useState(false);
-  const [breakpoints, setBreakpoints] = useState<EditorBreakpoint[]>(() =>
-    readJson<EditorBreakpoint[]>('cpplab.breakpoints', [])
-      .filter((item) => item && typeof item.file === 'string' && typeof item.line === 'number')
-      .map((item) => ({ file: item.file, line: item.line, verified: false })),
-  );
-
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyVersion, setHistoryVersion] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -133,47 +110,24 @@ export default function App(): JSX.Element {
   const filesRef = useRef(files);
   const activeFileRef = useRef(activeFile);
   const dirtyRef = useRef(dirty);
-  const breakpointsRef = useRef(breakpoints);
-  const variablesRef = useRef(variables);
-  const expandedRef = useRef(expandedVars);
-  const watchesRef = useRef(watches);
-  const debugStateRef = useRef(debugState);
-  const debugThreadRef = useRef<number | null>(null);
-  const selectedFrameRef = useRef<number | null>(null);
-  const dapRef = useRef<DapClient | null>(null);
-  const pauseTokenRef = useRef(0);
-  const runSocketRef = useRef<WebSocket | null>(null);
   const saveTimersRef = useRef<Map<string, number>>(new Map());
-  const logIdRef = useRef(0);
   const gotoNonceRef = useRef(0);
   const lastTerminalPhaseRef = useRef<string>('');
   const cursorRef = useRef(cursor);
+  const runTokenRef = useRef(0);
 
   filesRef.current = files;
   activeFileRef.current = activeFile;
   dirtyRef.current = dirty;
-  breakpointsRef.current = breakpoints;
-  variablesRef.current = variables;
-  expandedRef.current = expandedVars;
-  watchesRef.current = watches;
-  debugStateRef.current = debugState;
   cursorRef.current = cursor;
 
-  const debugResize = useResizable(320, { min: 280, max: 520, storageKey: 'cpplab.debugWidth' });
   const bottomResize = useResizable(220, { min: 150, max: 520, storageKey: 'cpplab.bottomHeight', invert: true });
 
   const capabilities = projectState?.capabilities ?? null;
   const compilers = capabilities?.compilers ?? [];
-  const sandboxReady = capabilities?.sandbox.available ?? false;
+  const toolchainReady = capabilities?.toolchain.available !== false;
   const runBusy = runPhase === 'queued' || runPhase === 'compiling' || runPhase === 'running';
-  const debugActive = debugState === 'starting' || debugState === 'running' || debugState === 'paused';
-  const canRun = Boolean(activeFile) && sandboxReady && !runBusy && !debugActive;
-  const canDebug =
-    Boolean(activeFile) &&
-    sandboxReady &&
-    Boolean(capabilities?.tools.debugger) &&
-    !runBusy &&
-    !debugActive;
+  const canRun = Boolean(activeFile) && toolchainReady && !runBusy;
 
   useEffect(() => {
     saveLocal('cpplab.stdin', stdin);
@@ -188,15 +142,6 @@ export default function App(): JSX.Element {
     saveLocal('cpplab.editor', editorSettings);
   }, [editorSettings]);
   useEffect(() => {
-    saveLocal('cpplab.watches', watches.map((watch) => watch.expression));
-  }, [watches]);
-  useEffect(() => {
-    saveLocal(
-      'cpplab.breakpoints',
-      breakpoints.map(({ file, line }) => ({ file, line })),
-    );
-  }, [breakpoints]);
-  useEffect(() => {
     if (activeFile) saveLocal('cpplab.activeFile', activeFile);
   }, [activeFile]);
   useEffect(() => {
@@ -205,18 +150,20 @@ export default function App(): JSX.Element {
 
   useEffect(() => {
     void bootstrap();
+    const idle = window.requestIdleCallback ?? ((callback: () => void) => window.setTimeout(callback, 1200));
+    const handle = idle(() => void warmup());
     return () => {
       for (const timer of saveTimersRef.current.values()) window.clearTimeout(timer);
-      runSocketRef.current?.close();
-      dapRef.current?.close();
+      if (typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(handle);
+      else window.clearTimeout(handle);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    // Text the server renders per language (seeded project name, starter-code
+    // Text the client renders per language (seeded project name, starter-code
     // comment) has to follow a language switch. Skipped while an edit is
-    // unsaved: applyProjectState would replace the buffers with the server copy.
+    // unsaved: applyProjectState would replace the buffers with stored copies.
     if (!projectState || saveStatus !== 'saved') return;
     void refreshProject();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -236,19 +183,20 @@ export default function App(): JSX.Element {
     setSaveStatus('saved');
 
     const stored = readString('cpplab.activeFile');
-    const candidate = nextFiles[stored] ? stored : nextFiles[state.project.settings.entry] ? state.project.settings.entry : (Object.keys(nextFiles)[0] ?? '');
+    const candidate = nextFiles[stored]
+      ? stored
+      : nextFiles[state.project.settings.entry]
+        ? state.project.settings.entry
+        : (Object.keys(nextFiles)[0] ?? '');
     setActiveFile(candidate);
     activeFileRef.current = candidate;
     setOpenTabs((previous) => {
       const valid = previous.filter((file) => nextFiles[file]);
       if (candidate && !valid.includes(candidate)) valid.push(candidate);
-      if (nextFiles[state.project.settings.entry] && !valid.includes(state.project.settings.entry)) valid.unshift(state.project.settings.entry);
+      if (nextFiles[state.project.settings.entry] && !valid.includes(state.project.settings.entry)) {
+        valid.unshift(state.project.settings.entry);
+      }
       return valid;
-    });
-    setBreakpoints((previous) => {
-      const next = previous.filter((breakpoint) => nextFiles[breakpoint.file]).map((breakpoint) => ({ ...breakpoint, verified: false, id: undefined }));
-      breakpointsRef.current = next;
-      return next;
     });
     setGotoLine(null);
   }
@@ -259,8 +207,9 @@ export default function App(): JSX.Element {
       const state = await api.project();
       applyProjectState(state);
       setFatalError(null);
+      ensureCrossOriginIsolation();
     } catch (error) {
-      setFatalError(error instanceof Error ? error.message : t('app.error.backendUnreachable'));
+      setFatalError(error instanceof Error ? error.message : t('app.error.storageUnavailable'));
     } finally {
       setLoading(false);
     }
@@ -357,17 +306,10 @@ export default function App(): JSX.Element {
     });
   }
 
-  function appendDebug(kind: DebugLogEntry['kind'], text: string): void {
-    if (!text) return;
-    logIdRef.current += 1;
-    const entry = { id: logIdRef.current, kind, text };
-    setDebugLog((previous) => {
-      const next = [...previous, entry];
-      return next.length > 400 ? next.slice(next.length - 400) : next;
-    });
-  }
-
-  async function updateProjectSettings(patch: Partial<ProjectState['project']['settings']>, name?: string): Promise<void> {
+  async function updateProjectSettings(
+    patch: Partial<ProjectState['project']['settings']>,
+    name?: string,
+  ): Promise<void> {
     const previous = projectState;
     if (!previous) return;
     setProjectState({
@@ -437,95 +379,70 @@ export default function App(): JSX.Element {
     }
   }
 
-  async function recoverRun(runId: string): Promise<void> {
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      await new Promise((resolve) => window.setTimeout(resolve, attempt === 0 ? 200 : 250));
-      try {
-        const response = await api.runResult(runId);
-        if (response.result) {
-          applyRunResult(response.result);
-          return;
-        }
-        if (response.done) break;
-      } catch {
-        // The backend may still be recording the result; retry briefly.
-      }
-    }
-    pushToast('error', t('app.toast.runDisconnected'));
-    setRunPhase(null);
-  }
-
   async function handleRun(): Promise<void> {
     if (!canRun) return;
     if (dirtyRef.current.size > 0) await saveAll();
-    runSocketRef.current?.close();
+    const token = ++runTokenRef.current;
     setRunResult(null);
     setDiagnostics([]);
     setLiveStdout('');
     setLiveStderr('');
     setRunPhase('queued');
-    setRunMessage(t('app.run.waitingSlot'));
+    setRunMessage(t('app.run.phase.preparing'));
     setBottomTab('output');
     setBottomCollapsed(false);
-    setCurrentLine(null);
     lastTerminalPhaseRef.current = '';
-    appendTerminal(`$ ${compiler} -std=${std} ${opt} ${extraFlags.join(' ')} /workspace/${entry} -o /workspace/prog`.replace(/\s+/g, ' '));
     appendTerminal(
-      `[sandbox] nsjail · ${t('app.term.sandboxRootfs')} · ${t('app.term.sandboxNoNetwork')} · ${t('app.term.sandboxMemory', { n: runLimits.memoryMb })} · ${t('app.term.sandboxTimeLimit', { n: runLimits.timeMs })}`,
+      `$ ${compiler} -std=${std} ${opt} ${extraFlags.join(' ')} ${entry} -o program.wasm`.replace(/\s+/g, ' '),
+    );
+    appendTerminal(
+      `[wasm] ${t('app.term.toolchain', { llvm: capabilities?.toolchain.llvmVersion ?? '', mb: TOOLCHAIN_MIN_DOWNLOAD_MB })}`,
+    );
+    appendTerminal(
+      `[limits] ${t('app.term.wasmSandbox', { n: runLimits.memoryMb, ms: runLimits.timeMs })}`,
     );
 
+    const onEvent = (event: RunEvent): void => {
+      if (token !== runTokenRef.current) return;
+      if (event.type === 'phase') {
+        setRunPhase(event.phase);
+        if (event.message) setRunMessage(event.message);
+        if (event.phase === 'compiling' && lastTerminalPhaseRef.current !== 'compiling') {
+          lastTerminalPhaseRef.current = 'compiling';
+          appendTerminal(`[compile] ${t('app.term.compiling')}`);
+        }
+        if (event.phase === 'running' && lastTerminalPhaseRef.current !== 'running') {
+          lastTerminalPhaseRef.current = 'running';
+          appendTerminal(`[run] ${t('app.term.running')}`);
+        }
+      } else if (event.type === 'stdout') {
+        setLiveStdout((previous) => previous + event.data);
+      } else if (event.type === 'stderr') {
+        setLiveStderr((previous) => previous + event.data);
+      } else if (event.type === 'error') {
+        pushToast('error', event.message);
+        setLiveStderr((previous) => previous + (previous ? '\n' : '') + event.message);
+      } else if (event.type === 'result') {
+        applyRunResult(event.result);
+      }
+    };
+
     try {
-      const response = await api.run({
-        files: filesRef.current,
-        entry,
-        compiler,
-        std,
-        opt,
-        extraFlags,
-        stdin,
-        limits: { timeMs: runLimits.timeMs, memoryMb: runLimits.memoryMb, outputBytes: 65536 },
-      });
-      let gotResult = false;
-      const socket = new WebSocket(wsUrl(response.wsPath));
-      runSocketRef.current = socket;
-      socket.onmessage = (event) => {
-        let runEvent: RunEvent;
-        try {
-          runEvent = JSON.parse(event.data) as RunEvent;
-        } catch {
-          return;
-        }
-        if (runEvent.type === 'phase') {
-          setRunPhase(runEvent.phase);
-          if (runEvent.message) setRunMessage(runEvent.message);
-          if (runEvent.phase === 'compiling' && lastTerminalPhaseRef.current !== 'compiling') {
-            lastTerminalPhaseRef.current = 'compiling';
-            appendTerminal(`[compile] ${t('app.term.compiling')}`);
-          }
-          if (runEvent.phase === 'running' && lastTerminalPhaseRef.current !== 'running') {
-            lastTerminalPhaseRef.current = 'running';
-            appendTerminal('$ /workspace/prog');
-          }
-        } else if (runEvent.type === 'stdout') {
-          setLiveStdout((previous) => previous + runEvent.data);
-        } else if (runEvent.type === 'stderr') {
-          setLiveStderr((previous) => previous + runEvent.data);
-        } else if (runEvent.type === 'error') {
-          pushToast('error', runEvent.message);
-          setLiveStderr((previous) => previous + (previous ? '\n' : '') + runEvent.message);
-        } else if (runEvent.type === 'result') {
-          gotResult = true;
-          applyRunResult(runEvent.result);
-        }
-      };
-      socket.onerror = () => {
-        // The close handler runs the recovery path.
-      };
-      socket.onclose = () => {
-        if (runSocketRef.current === socket) runSocketRef.current = null;
-        if (!gotResult) void recoverRun(response.runId);
-      };
+      await api.run(
+        {
+          files: filesRef.current,
+          entry,
+          compiler,
+          std,
+          opt,
+          extraFlags,
+          stdin,
+          limits: { timeMs: runLimits.timeMs, memoryMb: runLimits.memoryMb, outputBytes: 65536 },
+        },
+        { onEvent },
+      );
     } catch (error) {
+      if (token !== runTokenRef.current) return;
       const message = error instanceof Error ? error.message : t('app.error.runRequestFailed');
       setRunPhase(null);
       setLiveStderr(message);
@@ -551,453 +468,6 @@ export default function App(): JSX.Element {
       pushToast('success', t('app.toast.formatted'));
     } catch (error) {
       pushToast('error', error instanceof Error ? error.message : t('app.error.formatFailed'));
-    }
-  }
-
-  function sourceToFile(sourcePath?: string): string | null {
-    if (!sourcePath) return null;
-    if (sourcePath.startsWith('/workspace/')) {
-      const relative = sourcePath.slice('/workspace/'.length);
-      return filesRef.current[relative] !== undefined ? relative : null;
-    }
-    if (sourcePath.startsWith('/')) return null;
-    return filesRef.current[sourcePath] !== undefined ? sourcePath : null;
-  }
-
-  function updateVerified(file: string, lines: number[], verified: boolean[], ids: Array<number | undefined> = []): void {
-    setBreakpoints((previous) => {
-      const next = previous.map((breakpoint) => {
-        if (breakpoint.file !== file) return breakpoint;
-        const index = lines.indexOf(breakpoint.line);
-        if (index < 0) return breakpoint;
-        return { ...breakpoint, verified: Boolean(verified[index]), id: ids[index] ?? breakpoint.id };
-      });
-      breakpointsRef.current = next;
-      return next;
-    });
-  }
-
-  function handleToggleBreakpoint(line: number): void {
-    const file = activeFileRef.current;
-    if (!file) return;
-    const previous = breakpointsRef.current;
-    const existing = previous.find((breakpoint) => breakpoint.file === file && breakpoint.line === line);
-    const next = existing
-      ? previous.filter((breakpoint) => !(breakpoint.file === file && breakpoint.line === line))
-      : [...previous, { file, line, verified: false }].sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
-    breakpointsRef.current = next;
-    setBreakpoints(next);
-    if (debugStateRef.current === 'running' || debugStateRef.current === 'paused') {
-      const lines = next.filter((breakpoint) => breakpoint.file === file).map((breakpoint) => breakpoint.line);
-      void dapRef.current
-        ?.setBreakpoints(file, lines)
-        .then((result) => updateVerified(file, lines, result.map((item) => item.verified), result.map((item) => item.id)))
-        .catch((error) => pushToast('error', error instanceof Error ? error.message : t('app.error.syncBreakpoints')));
-    }
-  }
-
-  function handleBreakpointResponse(file: string, lines: number[], result: DapBreakpoint[]): void {
-    updateVerified(file, lines, result.map((item) => item.verified), result.map((item) => item.id));
-  }
-
-  function handleBreakpointEvent(breakpoint: DapBreakpoint): void {
-    const file = breakpoint.source?.path ? sourceToFile(breakpoint.source.path) : null;
-    if (breakpoint.id === undefined && breakpoint.line === undefined) return;
-    setBreakpoints((previous) => {
-      const next = previous.map((item) => {
-        if (breakpoint.id !== undefined) {
-          return item.id === breakpoint.id ? { ...item, verified: Boolean(breakpoint.verified) } : item;
-        }
-        if (file && item.file !== file) return item;
-        if (breakpoint.line !== undefined && item.line !== breakpoint.line) return item;
-        return { ...item, verified: Boolean(breakpoint.verified) };
-      });
-      breakpointsRef.current = next;
-      return next;
-    });
-  }
-
-  async function loadVariables(reference: number, token: number): Promise<void> {
-    const dap = dapRef.current;
-    if (!dap || variablesRef.current[reference] || loadingRefs.has(reference)) return;
-    setLoadingRefs((previous) => new Set(previous).add(reference));
-    try {
-      const result = await dap.variables(reference);
-      if (token !== pauseTokenRef.current) return;
-      setVariables((previous) => ({ ...previous, [reference]: result }));
-    } catch (error) {
-      if (token === pauseTokenRef.current) {
-        appendDebug('error', error instanceof Error ? error.message : t('app.error.loadVariables'));
-      }
-    } finally {
-      setLoadingRefs((previous) => {
-        const next = new Set(previous);
-        next.delete(reference);
-        return next;
-      });
-    }
-  }
-
-  async function loadFrame(frame: DapStackFrame, token: number): Promise<void> {
-    const dap = dapRef.current;
-    if (!dap) return;
-    selectedFrameRef.current = frame.id;
-    setSelectedFrameId(frame.id);
-    const file = sourceToFile(frame.source?.path);
-    if (file) {
-      openFile(file, frame.line, frame.column);
-      setCurrentLine({ file, line: frame.line });
-    } else {
-      setCurrentLine(null);
-    }
-    try {
-      const nextScopes = await dap.scopes(frame.id);
-      if (token !== pauseTokenRef.current) return;
-      setScopes(nextScopes);
-      setVariables({});
-      variablesRef.current = {};
-      const emptyExpanded = new Set<number>();
-      expandedRef.current = emptyExpanded;
-      setExpandedVars(emptyExpanded);
-      const localScope = nextScopes.find((scope) => /^locals?$/i.test(scope.name)) ?? nextScopes.find((scope) => scope.variablesReference > 0);
-      if (localScope) {
-        const nextExpanded = new Set([localScope.variablesReference]);
-        expandedRef.current = nextExpanded;
-        setExpandedVars(nextExpanded);
-        void loadVariables(localScope.variablesReference, token);
-      }
-      await refreshWatches(frame.id, token);
-    } catch (error) {
-      if (token === pauseTokenRef.current) {
-        appendDebug('error', error instanceof Error ? error.message : t('app.error.loadScopes'));
-      }
-    }
-  }
-
-  async function refreshWatches(frameId: number, token: number): Promise<void> {
-    const dap = dapRef.current;
-    if (!dap || watchesRef.current.length === 0) return;
-    setWatches((previous) => previous.map((watch) => ({ ...watch, loading: true, error: undefined })));
-    await Promise.all(
-      watchesRef.current.map(async (watch) => {
-        try {
-          const result = await dap.evaluate(watch.expression, frameId, 'watch');
-          if (token !== pauseTokenRef.current) return;
-          setWatches((previous) =>
-            previous.map((item) =>
-              item.expression === watch.expression
-                ? { ...item, loading: false, value: result.result, type: result.type, error: undefined }
-                : item,
-            ),
-          );
-        } catch (error) {
-          if (token !== pauseTokenRef.current) return;
-          setWatches((previous) =>
-            previous.map((item) =>
-              item.expression === watch.expression
-                ? { ...item, loading: false, error: error instanceof Error ? error.message : t('app.error.evaluateFailed') }
-                : item,
-            ),
-          );
-        }
-      }),
-    );
-  }
-
-  async function handleStopped(body: { threadId: number; reason: string; description?: string }): Promise<void> {
-    const token = ++pauseTokenRef.current;
-    debugThreadRef.current = body.threadId;
-    setDebugThreadId(body.threadId);
-    setFrames([]);
-    setSelectedFrameId(null);
-    setScopes([]);
-    setVariables({});
-    appendDebug('system', t('app.debug.paused', { reason: body.description ?? body.reason }));
-    const dap = dapRef.current;
-    if (!dap) return;
-    try {
-      const nextFrames = await dap.stackTrace(body.threadId);
-      if (token !== pauseTokenRef.current) return;
-      setFrames(nextFrames);
-      setDebugTab('stack');
-      if (nextFrames[0]) await loadFrame(nextFrames[0], token);
-    } catch (error) {
-      if (token === pauseTokenRef.current) {
-        appendDebug('error', error instanceof Error ? error.message : t('app.error.loadStack'));
-      }
-    }
-  }
-
-  function debugHandlers(): DapHandlers {
-    return {
-      onState: (state) => {
-        debugStateRef.current = state;
-        setDebugState(state);
-        if (state === 'running') {
-          setCurrentLine(null);
-        }
-        if (state === 'terminated') {
-          pauseTokenRef.current += 1;
-          setCurrentLine(null);
-          setFrames([]);
-          setScopes([]);
-          setSelectedFrameId(null);
-          setDebugSession(null);
-        }
-      },
-      onStopped: (body) => {
-        void handleStopped(body);
-      },
-      onContinued: () => {
-        pauseTokenRef.current += 1;
-        setCurrentLine(null);
-        setFrames([]);
-        setScopes([]);
-        setVariables({});
-        setSelectedFrameId(null);
-        setWatches((previous) => previous.map((watch) => ({ expression: watch.expression })));
-        appendDebug('system', t('app.debug.continued'));
-      },
-      onOutput: (body) => {
-        const kind = body.category === 'stdout' ? 'stdout' : body.category === 'stderr' ? 'stderr' : 'console';
-        appendDebug(kind, body.output);
-      },
-      onTerminated: (message) => {
-        appendDebug('system', message ? t('app.debug.endedWith', { reason: message }) : t('app.debug.ended'));
-        setDebugState('terminated');
-        debugStateRef.current = 'terminated';
-        setDebugSession(null);
-        setCurrentLine(null);
-      },
-      onExited: (exitCode) => {
-        appendDebug('system', t('app.debug.programExited', { code: exitCode }));
-      },
-      onLog: (message) => appendDebug('console', message),
-      onBreakpoint: (breakpoint) => handleBreakpointEvent(breakpoint),
-      onBreakpoints: (file, result) => {
-        const lines = breakpointsRef.current.filter((item) => item.file === file).map((item) => item.line);
-        handleBreakpointResponse(file, lines, result);
-      },
-      onCapabilities: () => undefined,
-      onError: (message) => {
-        appendDebug('error', message);
-        pushToast('error', message);
-      },
-    };
-  }
-
-  async function handleStartDebug(): Promise<void> {
-    if (!canDebug) return;
-    if (dirtyRef.current.size > 0) await saveAll();
-    pauseTokenRef.current += 1;
-    setBreakpoints((previous) => {
-      const next = previous.map((breakpoint) => ({ ...breakpoint, id: undefined, verified: false }));
-      breakpointsRef.current = next;
-      return next;
-    });
-    setDebugLog([]);
-    setFrames([]);
-    setScopes([]);
-    setVariables({});
-    const emptyExpanded = new Set<number>();
-    expandedRef.current = emptyExpanded;
-    setExpandedVars(emptyExpanded);
-    setCurrentLine(null);
-    setSelectedFrameId(null);
-    setDebugThreadId(null);
-    setDebugState('starting');
-    debugStateRef.current = 'starting';
-    setBottomTab('debug');
-    setBottomCollapsed(false);
-    setDiagnostics([]);
-    setDebugTab('stack');
-    appendDebug('system', t('app.debug.compilingTarget'));
-    appendTerminal(`[debug] ${compiler} -std=${std} -g -O0 /workspace/${entry} -o /workspace/prog`);
-
-    try {
-      const response = await api.startDebug({
-        files: filesRef.current,
-        entry,
-        compiler,
-        std,
-        extraFlags,
-      });
-      if ('sessionId' in response) {
-        const breakpointMap: Record<string, number[]> = {};
-        for (const breakpoint of breakpointsRef.current) {
-          (breakpointMap[breakpoint.file] ??= []).push(breakpoint.line);
-        }
-        setDebugSession({ sessionId: response.sessionId, program: response.program, cwd: response.cwd });
-        const client = new DapClient(response.sessionId, {
-          program: response.program,
-          cwd: response.cwd,
-          breakpoints: breakpointMap,
-          handlers: debugHandlers(),
-        });
-        dapRef.current = client;
-        client.connect();
-        appendDebug('system', t('app.debug.lldbStarted', { cwd: response.cwd, ms: response.compileTimeMs }));
-        appendTerminal(`[debug] ${t('app.term.debugSessionCreated', { id: response.sessionId.slice(0, 8) })}`);
-      } else {
-        setDiagnostics((response.diagnostics ?? []) as Diagnostic[]);
-        setDebugState('idle');
-        debugStateRef.current = 'idle';
-        setBottomTab('problems');
-        pushToast('error', t('app.error.debugCompileFailed'));
-        appendDebug('error', response.compileOutput || t('app.error.debugCompileFailed'));
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : t('app.error.startDebugFailed');
-      setDebugState('terminated');
-      debugStateRef.current = 'terminated';
-      setDebugSession(null);
-      appendDebug('error', message);
-      pushToast('error', message);
-    }
-  }
-
-  async function handleStopDebug(): Promise<void> {
-    const dap = dapRef.current;
-    dapRef.current = null;
-    pauseTokenRef.current += 1;
-    if (dap) void dap.disconnect();
-    if (debugSession) void api.stopDebug(debugSession.sessionId).catch(() => undefined);
-    setDebugState('terminated');
-    debugStateRef.current = 'terminated';
-    setDebugSession(null);
-    setCurrentLine(null);
-    setFrames([]);
-    setScopes([]);
-    setSelectedFrameId(null);
-    appendDebug('system', t('app.debug.sessionStopped'));
-    appendTerminal(`[debug] ${t('app.term.debugSessionStopped')}`);
-  }
-
-  function ensurePaused(): boolean {
-    if (debugStateRef.current !== 'paused') {
-      pushToast('info', t('app.toast.needPaused'));
-      return false;
-    }
-    return true;
-  }
-
-  function handleContinue(): void {
-    if (!debugThreadRef.current || !dapRef.current) return;
-    void dapRef.current.continue(debugThreadRef.current).catch((error) => pushToast('error', error.message));
-  }
-
-  function handlePause(): void {
-    if (!debugThreadRef.current || !dapRef.current) return;
-    void dapRef.current.pause(debugThreadRef.current).catch((error) => pushToast('error', error.message));
-  }
-
-  function handleNext(): void {
-    if (!ensurePaused() || !debugThreadRef.current || !dapRef.current) return;
-    void dapRef.current.next(debugThreadRef.current).catch((error) => pushToast('error', error.message));
-  }
-
-  function handleStepIn(): void {
-    if (!ensurePaused() || !debugThreadRef.current || !dapRef.current) return;
-    void dapRef.current.stepIn(debugThreadRef.current).catch((error) => pushToast('error', error.message));
-  }
-
-  function handleStepOut(): void {
-    if (!ensurePaused() || !debugThreadRef.current || !dapRef.current) return;
-    void dapRef.current.stepOut(debugThreadRef.current).catch((error) => pushToast('error', error.message));
-  }
-
-  function handleRestart(): void {
-    if (!dapRef.current) return;
-    pauseTokenRef.current += 1;
-    setCurrentLine(null);
-    setFrames([]);
-    setScopes([]);
-    setSelectedFrameId(null);
-    void dapRef.current.restart().catch((error) => pushToast('error', error.message));
-    appendDebug('system', t('app.debug.restarted'));
-  }
-
-  function handleSelectFrame(frame: DapStackFrame): void {
-    void loadFrame(frame, pauseTokenRef.current);
-  }
-
-  function handleExpandVariable(reference: number): void {
-    if (expandedRef.current.has(reference)) {
-      const next = new Set(expandedRef.current);
-      next.delete(reference);
-      expandedRef.current = next;
-      setExpandedVars(next);
-      return;
-    }
-    const next = new Set(expandedRef.current);
-    next.add(reference);
-    expandedRef.current = next;
-    setExpandedVars(next);
-    void loadVariables(reference, pauseTokenRef.current);
-  }
-
-  async function evaluateWatch(expression: string, frameId: number, token: number): Promise<void> {
-    const dap = dapRef.current;
-    if (!dap) return;
-    setWatches((previous) => previous.map((watch) => (watch.expression === expression ? { ...watch, loading: true } : watch)));
-    try {
-      const result = await dap.evaluate(expression, frameId, 'watch');
-      if (token !== pauseTokenRef.current) return;
-      setWatches((previous) =>
-        previous.map((watch) =>
-          watch.expression === expression
-            ? { ...watch, loading: false, value: result.result, type: result.type, error: undefined }
-            : watch,
-        ),
-      );
-    } catch (error) {
-      if (token !== pauseTokenRef.current) return;
-      setWatches((previous) =>
-        previous.map((watch) =>
-          watch.expression === expression
-            ? { ...watch, loading: false, error: error instanceof Error ? error.message : t('app.error.evaluateFailed') }
-            : watch,
-        ),
-      );
-    }
-  }
-
-  function handleAddWatch(): void {
-    const expression = watchInput.trim();
-    if (!expression) return;
-    if (watchesRef.current.some((watch) => watch.expression === expression)) {
-      pushToast('info', t('app.toast.watchExists'));
-      return;
-    }
-    const next = [...watchesRef.current, { expression }];
-    watchesRef.current = next;
-    setWatches(next);
-    setWatchInput('');
-    if (debugStateRef.current === 'paused' && selectedFrameRef.current !== null) {
-      void evaluateWatch(expression, selectedFrameRef.current, pauseTokenRef.current);
-    }
-  }
-
-  function handleRemoveWatch(expression: string): void {
-    const next = watchesRef.current.filter((watch) => watch.expression !== expression);
-    watchesRef.current = next;
-    setWatches(next);
-  }
-
-  async function handleEvaluateRepl(): Promise<void> {
-    const expression = debugExpression.trim();
-    if (!expression) return;
-    if (!ensurePaused() || selectedFrameRef.current === null || !dapRef.current) return;
-    setEvaluationBusy(true);
-    appendDebug('repl', `› ${expression}`);
-    try {
-      const result = await dapRef.current.evaluate(expression, selectedFrameRef.current, 'repl');
-      appendDebug('repl', `${result.result}${result.type ? `  (${result.type})` : ''}`);
-      setDebugExpression('');
-    } catch (error) {
-      appendDebug('error', error instanceof Error ? error.message : t('app.error.evaluateFailed'));
-    } finally {
-      setEvaluationBusy(false);
     }
   }
 
@@ -1054,9 +524,6 @@ export default function App(): JSX.Element {
         setActiveFile(fallback);
         activeFileRef.current = fallback;
       }
-      const nextBreakpoints = breakpointsRef.current.filter((breakpoint) => breakpoint.file !== file);
-      breakpointsRef.current = nextBreakpoints;
-      setBreakpoints(nextBreakpoints);
       pushToast('success', t('app.toast.deletedFile', { file }));
     } catch (error) {
       pushToast('error', error instanceof Error ? error.message : t('app.error.deleteFileFailed'));
@@ -1070,26 +537,10 @@ export default function App(): JSX.Element {
     const nextTabs = openTabs.filter((item) => item !== file);
     setOpenTabs(nextTabs);
     if (activeFile === file) {
-      const fallback = nextTabs[Math.max(0, index - 1)] ?? (files[entry] ? entry : Object.keys(files)[0] ?? '');
+      const fallback = nextTabs[Math.max(0, index - 1)] ?? (files[entry] ? entry : (Object.keys(files)[0] ?? ''));
       setActiveFile(fallback);
       activeFileRef.current = fallback;
       if (fallback && !nextTabs.includes(fallback)) setOpenTabs([...nextTabs, fallback]);
-    }
-  }
-
-  function handleToggleBreakpointAt(file: string, line: number): void {
-    if (file !== activeFileRef.current) openFile(file);
-    setBreakpoints((previous) => {
-      const next = previous.filter((breakpoint) => !(breakpoint.file === file && breakpoint.line === line));
-      breakpointsRef.current = next;
-      return next;
-    });
-    if (debugStateRef.current === 'running' || debugStateRef.current === 'paused') {
-      const lines = breakpointsRef.current.filter((breakpoint) => breakpoint.file === file).map((breakpoint) => breakpoint.line);
-      void dapRef.current
-        ?.setBreakpoints(file, lines)
-        .then((result) => updateVerified(file, lines, result.map((item) => item.verified), result.map((item) => item.id)))
-        .catch(() => undefined);
     }
   }
 
@@ -1099,8 +550,6 @@ export default function App(): JSX.Element {
       setLiveStderr('');
       setRunResult(null);
       setDiagnostics([]);
-    } else if (bottomTab === 'debug') {
-      setDebugLog([]);
     } else if (bottomTab === 'terminal') {
       setTerminalLog([]);
     } else if (bottomTab === 'problems') {
@@ -1112,30 +561,10 @@ export default function App(): JSX.Element {
 
   const actionsRef = useRef({
     run: handleRun,
-    startDebug: handleStartDebug,
-    stopDebug: handleStopDebug,
-    continue: handleContinue,
-    pause: handlePause,
-    next: handleNext,
-    stepIn: handleStepIn,
-    stepOut: handleStepOut,
     format: handleFormat,
     save: saveAll,
-    toggleBreakpoint: handleToggleBreakpoint,
   });
-  actionsRef.current = {
-    run: handleRun,
-    startDebug: handleStartDebug,
-    stopDebug: handleStopDebug,
-    continue: handleContinue,
-    pause: handlePause,
-    next: handleNext,
-    stepIn: handleStepIn,
-    stepOut: handleStepOut,
-    format: handleFormat,
-    save: saveAll,
-    toggleBreakpoint: handleToggleBreakpoint,
-  };
+  actionsRef.current = { run: handleRun, format: handleFormat, save: saveAll };
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -1148,35 +577,6 @@ export default function App(): JSX.Element {
           target?.tagName === 'SELECT' ||
           target?.isContentEditable);
       const mod = event.ctrlKey || event.metaKey;
-      if (event.key === 'F5') {
-        event.preventDefault();
-        if (event.shiftKey) {
-          void actionsRef.current.stopDebug();
-        } else if (debugStateRef.current === 'paused') {
-          actionsRef.current.continue();
-        } else if (debugStateRef.current === 'running') {
-          actionsRef.current.pause();
-        } else {
-          void actionsRef.current.startDebug();
-        }
-        return;
-      }
-      if (event.key === 'F9') {
-        event.preventDefault();
-        actionsRef.current.toggleBreakpoint(cursorRef.current.line);
-        return;
-      }
-      if (event.key === 'F10') {
-        event.preventDefault();
-        actionsRef.current.next();
-        return;
-      }
-      if (event.key === 'F11') {
-        event.preventDefault();
-        if (event.shiftKey) actionsRef.current.stepOut();
-        else actionsRef.current.stepIn();
-        return;
-      }
       if (editing) return;
       if (mod && event.key.toLowerCase() === 's') {
         event.preventDefault();
@@ -1198,9 +598,6 @@ export default function App(): JSX.Element {
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
 
-  const workspaceStyle = {
-    '--debug-width': `${debugResize.size}px`,
-  } as React.CSSProperties & Record<string, string>;
   const mainStyle = {
     '--bottom-height': `${bottomResize.size}px`,
   } as React.CSSProperties & Record<string, string>;
@@ -1241,12 +638,8 @@ export default function App(): JSX.Element {
         projectName={projectState.project.name}
         saveState={saveStatus}
         runPhase={runPhase}
-        debugState={debugState}
         canRun={canRun}
-        canDebug={canDebug}
         onRun={() => void handleRun()}
-        onDebug={() => void handleStartDebug()}
-        onStopDebug={() => void handleStopDebug()}
         onFormat={() => void handleFormat()}
         onOpenHistory={() => {
           setSettingsOpen(false);
@@ -1267,20 +660,7 @@ export default function App(): JSX.Element {
         }}
       />
 
-      {!sandboxReady && (
-        <div className="system-banner">
-          <ShieldAlert size={15} />
-          <span>
-            {t('app.banner.sandboxNotReady')}
-            {capabilities?.sandbox.detail ?? t('app.banner.sandboxNoNsjail')}
-            {t('app.banner.sandboxHint')}
-            <code>npm run sandbox:setup</code>
-            {t('app.banner.sandboxSuffix')}
-          </span>
-        </div>
-      )}
-
-      <div className="workspace" style={workspaceStyle}>
+      <div className="workspace">
         <main className="main-column" style={mainStyle}>
           <section className="editor-card panel-card">
             <EditorToolbar
@@ -1323,13 +703,10 @@ export default function App(): JSX.Element {
                   files={files}
                   activeFile={activeFile}
                   diagnostics={diagnostics}
-                  breakpoints={breakpoints}
-                  currentLine={currentLine}
                   gotoLine={gotoLine}
                   settings={editorSettings}
                   onChange={handleChange}
                   onCursor={(line, column) => setCursor({ line, column })}
-                  onToggleBreakpoint={handleToggleBreakpoint}
                   onSave={() => void saveAll()}
                 />
               ) : (
@@ -1361,52 +738,10 @@ export default function App(): JSX.Element {
             onStdinChange={(value) => setStdin(value.slice(0, capabilities?.limits.maxStdinBytes ?? 1024 * 1024))}
             stdinLimit={capabilities?.limits.maxStdinBytes ?? 1024 * 1024}
             terminalLog={terminalLog}
-            debugLog={debugLog}
-            debugState={debugState}
-            debugExpression={debugExpression}
-            onDebugExpressionChange={setDebugExpression}
-            onEvaluate={() => void handleEvaluateRepl()}
-            evaluationBusy={evaluationBusy}
             onProblemClick={handleOpenProblem}
             onClearOutput={handleClearOutput}
           />
         </main>
-
-        <div
-          className={`resizer vertical ${debugResize.dragging ? 'dragging' : ''}`}
-          onPointerDown={debugResize.startDrag}
-          title={t('app.resizer.debugWidth')}
-        />
-
-        <DebugPanel
-          state={debugState}
-          breakpoints={breakpoints}
-          frames={frames}
-          selectedFrameId={selectedFrameId}
-          scopes={scopes}
-          variables={variables}
-          expanded={expandedVars}
-          loadingRefs={loadingRefs}
-          watches={watches}
-          watchInput={watchInput}
-          activeTab={debugTab}
-          onTabChange={setDebugTab}
-          onStart={() => void handleStartDebug()}
-          onStop={() => void handleStopDebug()}
-          onContinue={handleContinue}
-          onPause={handlePause}
-          onNext={handleNext}
-          onStepIn={handleStepIn}
-          onStepOut={handleStepOut}
-          onRestart={handleRestart}
-          onSelectFrame={handleSelectFrame}
-          onExpandVariable={handleExpandVariable}
-          onWatchInputChange={setWatchInput}
-          onAddWatch={handleAddWatch}
-          onRemoveWatch={handleRemoveWatch}
-          onOpenBreakpoint={(breakpoint) => openFile(breakpoint.file, breakpoint.line)}
-          onRemoveBreakpoint={(breakpoint) => handleToggleBreakpointAt(breakpoint.file, breakpoint.line)}
-        />
       </div>
 
       <StatusBar
@@ -1418,7 +753,6 @@ export default function App(): JSX.Element {
         saveState={saveStatus}
         runPhase={runPhase}
         runResult={runResult}
-        debugState={debugState}
       />
 
       <HistoryDrawer
@@ -1448,7 +782,7 @@ export default function App(): JSX.Element {
       {flagsOpen && (
         <FlagsPopover
           flags={extraFlags}
-          onChange={(flags) => setExtraFlags(flags.slice(0, 12))}
+          onChange={(flags) => setExtraFlags(flags.slice(0, 8))}
           onClose={() => setFlagsOpen(false)}
         />
       )}

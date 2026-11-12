@@ -9,14 +9,8 @@ interface FlagsPopoverProps {
 }
 
 const COMMON_FLAGS = [
-  { flag: '-Wall', labelKey: 'dialogs.flags.wall' },
-  { flag: '-Wextra', labelKey: 'dialogs.flags.wextra' },
-  { flag: '-Werror', labelKey: 'dialogs.flags.werror' },
-  { flag: '-pthread', labelKey: 'dialogs.flags.pthread' },
-  { flag: '-lm', labelKey: 'dialogs.flags.lm' },
-  { flag: '-fsanitize=address', labelKey: 'dialogs.flags.asan' },
-  { flag: '-fsanitize=undefined', labelKey: 'dialogs.flags.ubsan' },
-  { flag: '-fsanitize=address,undefined', labelKey: 'dialogs.flags.asanUbsan' },
+  { flag: '-DDEBUG', labelKey: 'dialogs.flags.debug' },
+  { flag: '-DNDEBUG', labelKey: 'dialogs.flags.ndebug' },
 ] as const;
 
 export function FlagsPopover(props: FlagsPopoverProps): JSX.Element {

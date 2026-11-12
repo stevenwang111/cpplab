@@ -13,9 +13,6 @@ const zhCN = {
   'fmt.relative.minutesAgo': '{n} 分钟前',
   'fmt.relative.hoursAgo': '{n} 小时前',
 
-  // src/client/api.ts
-  'api.httpError': '请求失败（HTTP {status}）',
-
   // src/client/editor/monaco.ts
   'monaco.snippet.main.detail': '程序入口',
   'monaco.snippet.main.doc': '带标准输入输出加速的 main 函数',
@@ -54,8 +51,6 @@ const en: Record<keyof typeof zhCN, string> = {
   'fmt.relative.justNow': 'Just now',
   'fmt.relative.minutesAgo': '{n} minutes ago',
   'fmt.relative.hoursAgo': '{n} hours ago',
-
-  'api.httpError': 'Request failed (HTTP {status})',
 
   'monaco.snippet.main.detail': 'Program entry',
   'monaco.snippet.main.doc': 'main with fast I/O',

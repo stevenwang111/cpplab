@@ -1,4 +1,8 @@
-import * as monaco from 'monaco-editor';
+// `edcore.main` is the full editor (all contributions, workers, keybindings)
+// without the language packs: only C++ is registered below, which keeps the
+// static bundle far smaller than importing `monaco-editor` wholesale.
+import * as monaco from 'monaco-editor/esm/vs/editor/edcore.main';
+import 'monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution';
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import type { MessageKey } from '../../shared/i18n';
 import { t } from '../i18n';
@@ -10,7 +14,8 @@ self.MonacoEnvironment = {
 };
 
 export const MONACO_THEME = 'cpplab-light';
-export const SANDBOX_ROOT = '/workspace';
+/** Editor model root. Source paths are workspace-relative. */
+export const WORKSPACE_URI_ROOT = '/workspace';
 
 monaco.editor.defineTheme(MONACO_THEME, {
   base: 'vs',
@@ -199,7 +204,7 @@ export function registerCppSnippets(): void {
 }
 
 export function modelUri(filePath: string): monaco.Uri {
-  return monaco.Uri.file(`${SANDBOX_ROOT}/${filePath}`);
+  return monaco.Uri.file(`${WORKSPACE_URI_ROOT}/${filePath}`);
 }
 
 export { monaco };

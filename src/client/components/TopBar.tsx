@@ -1,5 +1,4 @@
 import {
-  Bug,
   CircleHelp,
   Cloud,
   CloudUpload,
@@ -8,10 +7,8 @@ import {
   Loader2,
   Play,
   Settings2,
-  Square,
   Wand2,
 } from 'lucide-react';
-import type { DebugState } from '../debug/dapClient';
 import type { RunPhase } from '../../shared/types';
 import { t, useLocale } from '../i18n';
 
@@ -21,12 +18,8 @@ interface TopBarProps {
   projectName: string;
   saveState: SaveState;
   runPhase: RunPhase | null;
-  debugState: DebugState;
   canRun: boolean;
-  canDebug: boolean;
   onRun: () => void;
-  onDebug: () => void;
-  onStopDebug: () => void;
   onFormat: () => void;
   onOpenHistory: () => void;
   onOpenSettings: () => void;
@@ -66,8 +59,6 @@ function SaveIndicator({ state }: { state: SaveState }): JSX.Element {
 export function TopBar(props: TopBarProps): JSX.Element {
   useLocale();
   const runBusy = props.runPhase === 'queued' || props.runPhase === 'compiling' || props.runPhase === 'running';
-  const debugActive =
-    props.debugState === 'starting' || props.debugState === 'running' || props.debugState === 'paused';
 
   return (
     <header className="topbar">
@@ -101,16 +92,6 @@ export function TopBar(props: TopBarProps): JSX.Element {
               ? t('chrome.topbar.run.compiling')
               : t('chrome.topbar.run.running')
             : t('chrome.topbar.run.idle')}
-        </button>
-        <button
-          type="button"
-          className={`btn btn-debug ${debugActive ? 'is-active' : ''}`}
-          onClick={debugActive ? props.onStopDebug : props.onDebug}
-          disabled={debugActive ? false : !props.canDebug}
-          title={debugActive ? t('chrome.topbar.debug.stopTitle') : t('chrome.topbar.debug.startTitle')}
-        >
-          {debugActive ? <Square size={14} fill="currentColor" /> : <Bug size={15} />}
-          {debugActive ? t('chrome.topbar.debug.stop') : t('chrome.topbar.debug.start')}
         </button>
         <button
           type="button"

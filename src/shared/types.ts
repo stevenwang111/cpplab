@@ -1,6 +1,14 @@
-/** Contract shared by the HTTP API, WebSocket bridge and React client. */
+/**
+ * Contract shared by the local workspace store, the WebAssembly toolchain and
+ * the React client.
+ *
+ * There is no HTTP API any more: every type below describes data that is
+ * produced inside the browser. The shapes are kept close to the previous
+ * server contract so the run history and settings migration stay simple.
+ */
 
-export const COMPILERS = ['g++', 'clang++'] as const;
+/** The browser toolchain ships a single C++ compiler (LLVM/clang). */
+export const COMPILERS = ['clang++'] as const;
 export type CompilerId = (typeof COMPILERS)[number];
 
 export const STDS = ['c++17', 'c++20', 'c++23'] as const;
@@ -58,19 +66,25 @@ export interface CompilerCapability {
   version?: string;
 }
 
-export interface SandboxCapability {
-  driver: 'nsjail';
+/**
+ * State of the in-browser toolchain. `crossOriginIsolated` reports whether
+ * COOP/COEP are in effect, which lets the compiler worker use
+ * SharedArrayBuffer; the toolchain still boots without it, just slower.
+ */
+export interface ToolchainCapability {
+  driver: 'wasm';
   available: boolean;
   detail: string;
-  devicesReady: boolean;
-  version?: string;
+  runtime: 'wasm32-wasi';
+  crossOriginIsolated: boolean;
+  llvmVersion: string;
 }
 
 export interface ToolCapabilities {
   formatter: boolean;
   formatterVersion?: string;
-  debugger: boolean;
-  debuggerVersion?: string;
+  /** Source-level debugging is not possible in a pure client build. */
+  debugger: false;
 }
 
 export interface CapabilityLimits {
@@ -80,14 +94,13 @@ export interface CapabilityLimits {
   maxOutputBytes: number;
   maxRunTimeMs: number;
   maxMemoryMb: number;
-  maxDebugSessions: number;
 }
 
 export interface Capabilities {
   compilers: CompilerCapability[];
   stds: StdId[];
   opts: OptId[];
-  sandbox: SandboxCapability;
+  toolchain: ToolchainCapability;
   tools: ToolCapabilities;
   limits: CapabilityLimits;
 }
@@ -137,6 +150,10 @@ export interface RunResult {
 
 export type RunPhase = 'queued' | 'compiling' | 'running' | 'finished';
 
+/**
+ * Progress stream for a run. The client-side runner emits the same shape the
+ * old WebSocket bridge used, so the UI logic barely changed.
+ */
 export type RunEvent =
   | { type: 'phase'; phase: RunPhase; message?: string }
   | { type: 'stdout'; data: string }
@@ -159,39 +176,8 @@ export interface RunDetail extends RunResult {
   stdin: string;
 }
 
-export interface DebugStartRequest {
-  files: Record<string, string>;
-  entry: string;
-  compiler: CompilerId;
-  std: StdId;
-  extraFlags?: string[];
-}
-
-export interface DebugStartResponse {
-  sessionId: string;
-  status: 'OK';
-  entry: string;
-  program: string;
-  cwd: string;
-  compileTimeMs: number;
-}
-
-export interface DebugSessionSummary {
-  id: string;
-  state: 'starting' | 'active' | 'ended';
-  startedAt: number;
-  lastActive: number;
-}
-
-export type DapMessage =
-  | { seq: number; type: 'request'; command: string; arguments?: unknown }
-  | { seq: number; type: 'response'; request_seq: number; success: boolean; command: string; body?: unknown; message?: string }
-  | { seq: number; type: 'event'; event: string; body?: unknown };
-
-export interface ApiErrorBody {
-  error: {
-    code: string;
-    message: string;
-    detail?: string;
-  };
+export interface WorkspaceError {
+  code: string;
+  message: string;
+  detail?: string;
 }

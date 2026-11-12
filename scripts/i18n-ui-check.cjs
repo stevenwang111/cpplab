@@ -4,11 +4,13 @@
  * What it proves, in a real browser:
  *   1. an en-US browser gets an English page (lang, title, zero CJK in text or
  *      in title/aria-label/placeholder attributes),
- *   2. the starter code comment inside the editor is English too,
- *   3. the language switch in Settings flips the UI to Chinese and persists,
+ *   2. the starter code comment inside the editor is English too (it is file
+ *      content, so it is created once and not re-translated later),
+ *   3. the language switch in Settings flips the chrome to Chinese and persists,
  *   4. the choice survives a reload and can be switched back.
  *
- * Requires a running backend: BASE_URL=http://127.0.0.1:3104 npm run i18n:ui
+ * Requires a running preview server: npm run build && npm start, then
+ * BASE_URL=http://127.0.0.1:4173 npm run i18n:ui
  * Requires Playwright's chromium (available in this environment); the script
  * exits with a clear message when it is not installed.
  */
@@ -22,7 +24,7 @@ try {
   process.exit(2);
 }
 
-const BASE = process.env.BASE_URL || 'http://127.0.0.1:3104';
+const BASE = process.env.BASE_URL || 'http://127.0.0.1:4173';
 const SHOTS = process.env.SHOT_DIR || '/tmp';
 const CJK = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/;
 
@@ -99,7 +101,7 @@ async function openSettings(page) {
     const englishCjk = await cjkLines(englishText);
     check('no CJK anywhere in the English UI', englishCjk.length === 0, englishCjk.slice(0, 5).join(' / '));
 
-    const editor = await pageHasText(page, 'Set a breakpoint in main');
+    const editor = await pageHasText(page, 'Sample program: sort and print');
     check('starter comment in the editor is English', editor.found, editor.text.slice(0, 80).replace(/\s+/g, ' '));
     const labels = await page.evaluate(() => document.body.innerText);
     check('Run button visible', /\bRun\b/.test(labels));
@@ -123,8 +125,10 @@ async function openSettings(page) {
       'switch persisted to localStorage',
       (await page.evaluate(() => localStorage.getItem('cpplab.lang'))) === 'zh-CN',
     );
-    const zhEditor = await pageHasText(page, '在 main 中设置断点');
-    check('starter comment follows the language', zhEditor.found);
+    // The seeded comment is file content, not UI chrome: once the project is
+    // stored it keeps whatever language it was created in. Check the chrome.
+    const zhChrome = await page.evaluate(() => document.body.innerText);
+    check('chrome switched to Chinese', /运行/.test(zhChrome) && !/\bRun\b/.test(zhChrome));
     await page.screenshot({ path: `${SHOTS}/i18n-zh.png` });
 
     console.log('3. Reload keeps the choice, and switching back works');

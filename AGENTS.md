@@ -1,230 +1,187 @@
-# AGENTS.md — 在线 C++ IDE 开发约定
+# AGENTS.md — 纯客户端 C++ IDE 开发约定
 
 > 本文档是 AI 辅助开发的执行依据。若与代码冲突，先改文档再改代码。
-> 约束：单机部署，用户 ≤ 10 人。`MUST` 条目不可协商；`可选` 条目默认不做。
+> 形态：**纯静态站点，无后端**。`MUST` 条目不可协商；`可选` 条目默认不做。
 
 ## 0. 执行规则
 
 1. 按 §8 里程碑顺序开发，每个阶段跑通验收再进入下一阶段，不要并行铺开。
 2. §3「安全底线清单」是硬约束，任何简化都不得突破。
-3. 生成代码时同时给出验证方式（如何手动测试这条路径）。
+3. 生成代码时同时给出验证方式（如何在浏览器里手动确认这条路径）。
 4. 未覆盖的决策点：小决策直接做并说明理由；涉及架构/安全的决策先提问。
+5. 任何改动都必须能通过 `npm run typecheck && npm run build && npm run i18n:check`。
 
 ## 1. 项目目标与非目标
 
-**做**：网页版 C++ 编辑/编译/运行/调试平台 —— 语法高亮、自动缩进、补全、格式化、多文件；服务端 g++/clang++ 编译；图形化断点调试（断点、单步、调用栈、变量、Watch）；严格沙箱隔离不可信代码。
+**做**：网页版 C++ 编辑 / 编译 / 运行工作台 —— 语法高亮、自动缩进、补全、多文件、诊断跳转、
+stdin、运行历史；编译器本身以 WebAssembly 形式在浏览器内运行；执行结果按资源限额分类。
 
-**本期不做**：多用户实时协作；OJ 多测试点批量评测；跨语言（只做 C++）；集群/K8s；VS Code 插件生态；反向调试、多线程调试 UI。
+**本期不做**：图形化断点调试（无 DAP、无 lldb）；服务器端编译；多用户与账号体系；
+OJ 批量评测；跨语言（只做 C++）；格式化（工具链无 clang-format，见 §9）；
+`-pthread`、`-fsanitize`、可用的 C++ 异常展开（见 §2 的边界）。
 
-## 2. 威胁模型
+## 2. 威胁模型与能力边界
 
-需要防御三类攻击：
+攻击面从"宿主内核"变成了"页面里的一段 wasm"，需要防的是：
 
-1. **逃逸**：读宿主文件（密钥、`/etc/passwd`、他人代码）、访问内网、提权
-2. **资源滥用**：死循环、fork bomb、打爆输出、写满磁盘、拖垮宿主机
-3. **编译期攻击**：通过编译器选项（`-fplugin`、`-wrapper`）或编译器 bug 在编译阶段执行任意代码
+1. **越权访问**：用户程序试图读写工作区外的文件、访问网络、拿到宿主对象
+2. **资源滥用**：死循环、把内存涨爆、无限输出拖垮标签页
+3. **编译期攻击**：通过编译参数（`-fplugin`/`-wrapper`/`@file`）在编译阶段执行任意代码
 
-不防御：内核 0-day 级国家级攻击者（单机内部场景）。
+**不再需要防御**：进程逃逸、提权、宿主文件系统、fork bomb —— 这些能力在 wasm 目标里不存在。
 
-## 3. 安全底线清单（7 条，不可省略）
+**能力边界（必须诚实对待，不要承诺做不到的事）**
 
-> 与用户规模无关，任何简化都不得突破。
+| 能力 | 状态 | 原因 |
+|---|---|---|
+| 文件系统 | 只有 VFS | 运行器不实现 `path_*`，一律 `ENOSYS` |
+| 网络 | 无 | 不实现 `sock_*` |
+| 线程 `-pthread` | 不支持 | 需要模块内 SAB，需另一套 libc 构建 |
+| `-fsanitize=*` | 不支持 | 需要额外运行时 bundle，固定工具链未包含 |
+| C++ 异常展开 | 不支持 | 需要 emscripten JS unwinder，纯 wasm-ld 链接拿不到 |
+| 时区 | UTC | `_tzset_js` 无数据 |
+| clang-format | 未启用 | 不在 bundle 中，能力探测返回 false |
 
-1. **编译也在沙箱内**（编译器 bug 是真实攻击面）
-2. **编译选项白名单**（`-fplugin`/`-wrapper` 是编译期 RCE）
-3. **输出大小上限**（防 `while(1) puts()` 打爆磁盘）
-4. **杀进程组，不是杀子进程**
-5. **无网络**
-6. **只读 rootfs + 每任务独立 tmpfs**
-7. **no-new-privs + 非 root uid**
+## 3. 安全底线清单（不可省略）
+
+1. **编译器在 Worker 内运行**：不得为了"快"把编译搬到主线程或引入服务端。
+2. **编译参数白名单**：`-D…`、`-I…`（仅工作区内）、`-DDEBUG`、`-DNDEBUG`；其余显式拒绝。
+3. **输出上限在 `fd_write` 里**：不得改成"先攒完再截断"。
+4. **时限靠终止 Worker**：不得依赖程序自己让出，也不得用 `setTimeout` 只做提醒。
+5. **内存上限写在链接参数里**：`wasm-ld --max-memory`，不得只靠运行期判断。
+6. **运行器只提供最小 import 表**：新增任何 wasm 导入都要在 PR 说明里论证，且不得暴露宿主对象。
+7. **不缓存用户代码到远端**：存储只写 IndexedDB；唯一网络请求是固定 URL 的工具链 bundle。
 
 ## 4. 禁止事项
 
-- ❌ 把用户输入直接拼进 shell 字符串（MUST 用 argv 数组）
+- ❌ 把用户输入拼进 shell 字符串（本项目根本没有 shell，出现即说明架构跑偏）
 - ❌ 透传未校验的编译参数
-- ❌ 在沙箱外执行任何用户可控的二进制/脚本
-- ❌ 调试会话不设超时
-- ❌ 用 `exec`/`system` 调用 `timeout` 命令做限制（必须在代码里实现 watchdog）
-- ❌ 跳过 §3 安全底线的任何一条
+- ❌ 引入服务端进程、socket、`fs` 访问
+- ❌ 在主线程同步跑 clang（会冻结 UI）
+- ❌ 用 `Promise.all` 并联"首次 seed"与"读取文件列表"（见 §9 坑 6）
+- ❌ 跳过 §3 任何一条
 
 ## 5. 编译执行链路
 
 ### 5.1 流程
 
-1. 校验请求（文件数、大小、flags 白名单）
-2. `mkdtemp` 创建 tmpfs 工作目录，写入文件
-3. **编译**（沙箱内）：wall timeout 20s，内存 1 GiB
-4. 失败 → 返回 `CE` + 解析后的诊断
-5. **运行**（沙箱内）：喂 stdin，管道收 stdout/stderr
-6. 父进程 watchdog：超时或输出超限 → `kill(-pgid, SIGKILL)`
-7. 回收：杀进程组、删 tmpfs、释放 cgroup
-8. 状态分类：`signal==SIGXCPU/SIGKILL+超时` → TLE，cgroup OOM → MLE，输出超限 → OLE
+1. 校验请求（文件数 ≤16、单文件 ≤256 KiB、入口存在、flags 白名单）
+2. `resetVfs()` → 逐个 `writeFile('/home/user/<path>')`
+3. **编译**：每个翻译单元一次 `clang -cc1`，产物写 `/tmp/<name>.o`
+4. 任一单元失败 → `CE` + 解析后的诊断
+5. **链接**：`wasm-ld … -o /tmp/program.wasm`，带上内存上限
+6. `getFile('/tmp/program.wasm')` → `ArrayBuffer` transfer 给运行 Worker
+7. **运行**：实例化 → `__wasm_call_ctors` → `main`（或 `_start`）
+8. 状态分类：见 §5.4
 
-### 5.2 编译选项白名单（MUST）
+### 5.2 编译参数（MUST）
 
-**编译器参数本身是 RCE 向量**，绝不透传原始 argv。
+`clang -cc1` 只认 cc1 选项，不认驱动选项：
 
 ```
-允许：
-  -std=c++17|c++20|c++23
-  -O0|-O1|-O2|-O3|-Os
-  -g | -Wall | -Wextra | -Werror
-  -pthread | -lm
-  -fsanitize=address|undefined|address,undefined
-  -D<白名单字符>              （值需再校验，禁止 $( )
-  -I<仅限工作目录内>          （解析后必须仍在 workdir 下）
-  -ffile-prefix-map=...       （调试用，见 §6.4）
-
+允许（我们生成）：
+  -cc1 -triple wasm32-unknown-emscripten -emit-obj -O0..-O3/-Os
+  -internal-isystem /usr/include/c++/v1 …  -resource-dir /usr/lib/clang/23
+  -std=c++17|c++20|c++23  -ferror-limit 50  -fcxx-exceptions -fexceptions
+允许（用户）：
+  -D<标识符>[=值]   -I<工作区内相对路径>   -DDEBUG   -DNDEBUG
+忽略：
+  -lm（libm 在 libc 中）
 拒绝（必须显式拦截）：
-  -o          -fplugin      -wrapper      @任何东西
-  -specs=     -B            -Xclang       -include
-  --gcc-toolchain=           -plugin       -dumpspecs
-  任何包含 .. 或以 / 开头的路径参数
+  -fplugin  -wrapper  @file  -specs=  -B  -Xclang  -include  -o  -fdiagnostics-format
+  -fno-color-diagnostics  -ferror-limit=50（cc1 不接受 `=` 写法）
 ```
+
+中间产物目录 MUST 用 `/tmp`：VFS 里只有 `/home/user` 与 `/tmp` 存在，clang 不会自己建目录。
 
 ### 5.3 资源限制（MUST）
 
-| 维度 | 手段 | 运行期取值 |
+| 维度 | 手段 | 取值 |
 |---|---|---|
-| 墙钟超时 | 父进程 watchdog + SIGKILL | 2s（可配，上限 10s） |
-| CPU 时间 | `RLIMIT_CPU` / cgroup `cpu.max` | 与墙钟同量级 |
-| 内存 | **cgroup `memory.max`**（不要只靠 `RLIMIT_AS`） | 256 MiB |
-| 进程数 | cgroup `pids.max` | 14 |
-| 输出 | 父进程读管道，超限即杀 | 64 KiB |
-| 磁盘 | tmpfs `size=` + `RLIMIT_FSIZE` | 256 MiB |
-| fd | `RLIMIT_NOFILE` | 100 |
-| core | `RLIMIT_CORE=0` | — |
+| 墙钟超时 | 主线程 `worker.terminate()` | 2 s 默认，200 ms–10 s |
+| 内存 | `wasm-ld --max-memory` + `emscripten_resize_heap` 拒绝越界增长 | 256 MiB 默认，64–512 |
+| 输出 | `fd_write` 累计字节 | 64 KiB |
+| 输入 | stdin 字符串长度 | 1 MiB |
+| 文件 | 请求校验 | 16 个 / 256 KiB |
 
-**超时必须杀整个进程组**（`setsid()` 建组 + `kill(-pgid, SIGKILL)`），只杀直接子进程会漏掉孙子进程。
+上限是**双层**的：链接期限制模块能长多大，运行期 `emscripten_resize_heap` 决定允不允许长。
 
-### 5.4 沙箱通用加固（MUST）
+### 5.4 状态分类
 
-- 6 类 namespace：user / pid / mount / net / ipc / uts
-- `no_new_privs` + drop 全部 capabilities
-- 只读 rootfs，唯一可写为 tmpfs 工作目录
-- 非 root uid 运行；空网络命名空间（默认禁网）
-- 超时后杀**进程组**
-- 注入伪造的 `/etc/passwd`、`/etc/shadow`；敏感路径用 tmpfs 覆盖
+| 状态 | 判据 |
+|---|---|
+| `OK` | `main` 返回 0 |
+| `CE` | 某次 `clang` 退出码非 0 |
+| `RE` | `main` 返回非 0，或 trap 且不是内存原因 |
+| `TLE` | 主线程计时器触发，Worker 被 terminate |
+| `MLE` | `heapExhausted` 为真（`emscripten_resize_heap` 拒绝过增长），或堆顶 trap |
+| `OLE` | `fd_write` 计数越界 |
+| `IE` | 模块编译/实例化失败、Worker 崩溃 |
 
-## 6. 图形化调试
+## 6. 运行器实现要点
 
-### 6.1 架构要点
-
-- 前端与后端走 WebSocket 裸 JSON（DAP），后端只做 stdio ↔ WebSocket 的哑管道转发（Content-Length framing ⇄ WS 自带分帧）
-- **调试器与被调试程序放在同一个沙箱**，仅 stdio 穿出；避免 TCP 连接，网络保持禁用
-- 后端会话管理：并发 ≤ 2；空闲超时 5min / 硬超时 30min → kill 进程组；沙箱 `time_limit=3600` 兜底（防后端崩溃泄漏）
-
-### 6.2 状态机（MUST 严格遵守）
-
-```
-idle → starting → running ⇄ paused → terminated
-                     ↑________↓
-```
-
-- **只有 `paused` 才能发 `stackTrace`/`scopes`/`variables`/`evaluate`**，否则返回 `program is not stopped`
-- `setBreakpoints` 是**该文件的全量替换**，不是增量
-- 收到 `stopped` → 先拉 `stackTrace` 拿 `frameId` → 再 `scopes` → 用户展开时才 `variables`
-- `evaluate` 的 `context` 区分：`watch` / `repl` / `hover` / `variables`
-
-### 6.3 调试沙箱与普通运行的差异
-
-| 项 | 普通运行 | 调试会话 |
-|---|---|---|
-| `ptrace` | DENY | **ALLOW**（MUST，否则调试器无法工作） |
-| `time_limit` | 30s | 3600s（改由后端空闲超时管） |
-| 内存 | 256 MiB | 1024 MiB |
-| `pids_max` | 14 | 32 |
-| `/proc` | 最小化 | **完整挂载**（读 `/proc/pid/maps`） |
-| 网络 | 禁用 | **仍禁用** |
-
-Yama `ptrace_scope` 默认 1 允许 ptrace 自己的后代；调试器与目标同 uid 同 jail 即合法，**不需要改内核参数**（拆到不同 jail 才会撞墙——必须同 jail 的原因）。
-
-### 6.4 源码路径映射（最易踩坑）
-
-DWARF 记录的路径必须与 Monaco model URI 一致，否则断点不生效、栈帧跳不过去。
-
-**MUST 采用**：沙箱内固定挂载点 `/workspace`，编译用绝对路径：
-
-```
-沙箱 cwd = /workspace
-编译:  g++ -g -O0 -ffile-prefix-map=$PWD=/workspace /workspace/main.cpp -o /workspace/prog
-DWARF: /workspace/main.cpp        ← 天然一致
-前端:  Monaco model URI = "/workspace/main.cpp"
-```
-
-兜底：用 DAP `launch` 的 `sourceMap` 参数重映射：`[["/tmp/abc123", "/workspace"]]`。
-
-### 6.5 其他 MUST
-
-- **调试强制 `-g -O0`**（`-O1` 以上变量会被优化掉）
-- 三层超时：空闲 5min → disconnect + kill 进程组；硬超时 30min → kill；沙箱 `time_limit=3600` 兜底
-- 变量树**懒加载**：`variablesReference > 0` 才可展开，禁止一次性全量拉取
-- 断点 `verified:false` 必须画空心圈，否则用户以为断上了其实没有
-- 程序 `printf` 输出经 DAP `event: output` 进面板，`stdout`/`stderr` 分 tab
-
-### 6.6 调试功能范围
-
-**本期**：行断点增删、当前行高亮、继续/单步跳过/步入/步出/暂停/停止、调用栈（点击跳转 + 切帧）、局部变量树（懒加载）、Watch、调试控制台、程序输出面板。
-
-**后续（可选，默认不做）**：条件/日志断点 → `setVariable` 改值 → hover 求值 → 异常断点 → 多线程 → 反向调试。
+- **WASI 只实现必要项**：`fd_write`/`fd_read`/`fd_close`/`fd_seek`/`fd_fdstat_get`/
+  `environ_*`/`args_*`/`clock_time_get`/`random_get`/`proc_exit`。
+- **`env` 命名空间必须实现** `emscripten_resize_heap`：dlmalloc 靠它扩堆，缺了就把程序钉死在初始内存。
+  `_abort_js` 抛 `AbortTrap`，`__cxa_throw` 抛带说明的 `AbortTrap`，`_tzset_js` 空实现（UTC）。
+- **`proc_exit` 用异常实现**，不要试图 `return` 回去。
+- **每次运行新建 Worker**：这是唯一干净的 TLE 手段，也保证不会串状态。
+- **trap 分类要能解释给用户**：`unreachable` 就是 abort，输出面板要附人话说明。
 
 ## 7. 非功能需求
 
 | 项 | 要求 |
 |---|---|
-| 并发 | 编译 ≤2、运行 ≤4、调试会话 ≤2（进程内信号量） |
-| 限流 | 按 IP：运行 ≤ 1 req/s，突发 ≤ 5 |
-| 请求大小 | 源码 ≤ 256 KiB，stdin ≤ 1 MiB，文件数 ≤ 16 |
-| 输出 | stdout/stderr ≤ 64 KiB（超出截断并标 OLE） |
-| 日志 | 每次执行记录：源码 hash、参数、退出原因、沙箱 SIGSYS 次数 |
-| 清理 | 定期扫描超时未回收的沙箱进程并 kill |
+| 首次加载 | 工具链 bundle 约 41 MB brotli，必须走缓存，不得每次编译重下 |
+| 工具调用 | **串行**：一个 Worker 一次只跑一个进程，并发会互相踩 VFS |
+| 预热 | 空闲时 `requestIdleCallback` 预热；有真实编译在等时 MUST 让位 |
+| 请求大小 | 源码 ≤256 KiB，stdin ≤1 MiB，文件数 ≤16 |
+| 存储 | 运行历史裁剪到 60 条；项目/文件/历史都在 IndexedDB |
+| 文案 | 所有面向用户的字符串走 `src/shared/i18n`，zh-CN 与 en 必须键位一致 |
 
 ## 8. 里程碑
 
-- **M1 MVP 编译运行**：后端骨架 + SQLite；沙箱配置调通（编译 + 运行）；`/api/run` + 白名单 + 资源限制；Monaco 基础编辑；流式输出、编译错误跳转。**验收**：死循环代码 → TLE 且宿主无残留进程。
-- **M2 IDE 体验**：格式化、多文件 Tab、snippet 补全、stdin 交互、历史记录。**验收**：多文件项目可编译，格式化生效。
-- **M3 图形化调试**：调试沙箱（放开 ptrace）、DAP 桥接 + 会话管理 + 三层超时、断点装饰 + 当前行高亮、调试面板、路径映射验证。**验收**：设断点 → 命中 → 看局部变量 → 单步 → 栈帧点击跳转。
-- **M4 生产加固**：限流 + 并发信号量、审计日志 + 监控、沙箱 SIGSYS 告警。
+- **M1 编译运行闭环**：Worker 启动 + clang/wasm-ld + WASI 运行 + 诊断。**验收**：排序程序打印正确结果。
+- **M2 IDE 体验**：多文件、stdin、历史、格式化能力探测、双语界面。**验收**：多文件项目可编译运行。
+- **M3 限额与分类**：TLE/OLE/MLE/RE 全部可触发且分类正确。**验收**：四条用例各自命中预期状态。
+- **M4 托管就绪**：COOP/COEP、coi 兜底、静态部署验证、文档与截图。**验收**：`dist/` 直接托管可编译运行。
 
-每个里程碑内开发顺序：先写该模块的**沙箱/安全测试**（逃逸用例）→ 再写功能实现 → 最后写 UI → 通过验收再进下一阶段。
-
-## 9. 已知坑清单
+## 9. 已知坑清单（都是踩过的）
 
 | # | 坑 | 规避 |
 |---|---|---|
-| 1 | 只用 `docker --memory` 就上线 | 必须沙箱隔离，共享内核不够 |
-| 2 | 编译不沙箱 | 编译期才是最被忽视的 RCE 面 |
-| 3 | 超时只用 `timeout` 命令 | 漏掉子进程，必须杀进程组 |
-| 4 | 用 `RLIMIT_AS` 管内存 | cgroup `memory.max` 更可靠 |
-| 5 | 忘记输出限制 | 一个 `while(1) puts()` 打爆磁盘 |
-| 6 | seccomp 白名单少写一个 syscall | 程序在 `main()` 前 SIGSYS，需先宽松跑 strace 再收紧 |
-| 7 | clangd 无限制长跑 | 内存缓慢泄漏拖垮 worker |
-| 8 | 调试会话无超时 | 调试器挂着不释放 |
-| 9 | `stopped` 前发查询请求 | DAP 返回 `program is not stopped` |
-| 10 | 断点 `verified:false` 不处理 | 必须画空心圈 |
-| 11 | DWARF 路径与前端 URI 不一致 | 断点不生效、栈帧跳不过去（§6.4） |
-| 12 | 调试用了 `-O1` 以上 | 变量全是 `<optimized out>`，必须强制 `-O0` |
-| 13 | 变量树一次性全量拉取 | 大结构体卡死前端，必须懒加载 |
-| 14 | 调试沙箱忘了放开 `ptrace` | 调试器起不来，静默失败 |
+| 1 | 把驱动选项塞进 `-cc1` | `-fdiagnostics-format`/`-fno-color-diagnostics`/`-ferror-limit=50` 会被拒，编译 20 ms 就退出 |
+| 2 | `-o` 指向不存在的目录 | VFS 只有 `/home/user` 和 `/tmp`，产物一律写 `/tmp` |
+| 3 | Worker 流式回调是按行的 | chunk 之间要补 `\n`，否则所有诊断粘成一行、解析全废 |
+| 4 | 不实现 `emscripten_resize_heap` | 堆永远停在 16 MiB，任何真实分配都 abort 成 RE |
+| 5 | `main` 返回值被丢掉 | 一律 `emit exit code: Number(main())`，否则 `return 7` 会被当成通过 |
+| 6 | `Promise.all` 并行 seed 与读文件 | 首次访问文件列表为空、Monaco 不挂载；必须串行 |
+| 7 | 包内 `sideEffects: false` 把 worker 入口 tree-shake 成 0 字节 | Vite 插件在 `moduleParsed` 里改 `moduleSideEffects`，且要注册进 `worker.plugins` |
+| 8 | 预热与用户编译并发 | 两个 clang 进程抢同一 VFS，还会加载两份 21 MB 模块；工具调用必须加锁 |
+| 9 | 忘记 COOP/COEP | `crossOriginIsolated === false`，SAB 不可用；dev/preview 已在 vite 配置里设好 |
+| 10 | 假设 `clang-format` 可用 | 它会以 127 退出；走能力探测，UI 明说不可用 |
+| 11 | 用 `catch` 兜 `__cxa_throw` | 该目标没有 unwinder，抛异常必然终止；不要承诺 try/catch 能工作 |
 
 ## 10. 验收测试（每个 PR 必须能回答）
 
-**沙箱类**
-- [ ] `while(1);` → TLE，宿主无残留进程
-- [ ] `#include </etc/passwd>` → 编译失败
-- [ ] `system("cat /etc/passwd")` → 看不到真实内容
-- [ ] fork bomb → 被 `pids.max` 拦截
-- [ ] 大量 `puts()` → 被输出上限拦截
-- [ ] `socket(AF_INET,...)` → 失败（无网络）
-- [ ] `-fplugin=/tmp/x.so` → 被白名单拒绝
+**编译类**
+- [ ] 单文件排序程序 → `OK`，stdout 正确
+- [ ] `main.cpp + lib.cpp` 多文件 → 链接成功
+- [ ] 类型错误 → `CE`，"问题"面板有行号且可跳转
+- [ ] 写 `/home/user/x.o` 之类的越界产物路径 → 不出现（产物固定 `/tmp`）
 
-**调试类**
-- [ ] 设断点 → 启动 → 命中，当前行高亮正确
-- [ ] 单步跳过/步入/步出行为正确
-- [ ] 调用栈点击可跳转，切帧后变量随之变化
-- [ ] 变量树展开嵌套结构体/数组正常
-- [ ] Watch 表达式在每次 `stopped` 后刷新
-- [ ] 程序 `printf` 输出出现在输出面板
-- [ ] 断点设在空行 → 显示未验证（空心圈）
-- [ ] 5 分钟无操作 → 会话自动回收
-- [ ] 程序正常退出 → `terminated` 事件，UI 状态复位
+**限额类**
+- [ ] `while(true)` → `TLE`，且下一次运行不受影响
+- [ ] `while(1) cout << …` → `OLE`，在 64 KiB 截断
+- [ ] 8 MiB 分块分配直到堆顶 → `MLE`
+- [ ] `return 7` → `RE`，附退出码说明
+
+**边界类**
+- [ ] `-fplugin=/tmp/x.so` → 白名单拒绝
+- [ ] `#include "/etc/passwd"` → 编译失败（VFS 里没有）
+- [ ] `socket()` → 失败或 `ENOSYS`
+- [ ] 刷新页面 → 项目、文件、stdin、历史都在
+
+**文档类**
+- [ ] README 与 README-zh_CN 的功能列表与代码一致
+- [ ] 截图来自当前构建，不含已删除的功能

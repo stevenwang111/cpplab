@@ -225,12 +225,6 @@ export function HelpModal({ open, onClose }: { open: boolean; onClose: () => voi
           <h3>{t('dialogs.help.shortcuts')}</h3>
           <dl className="shortcut-list">
             <div><dt><kbd>Ctrl/⌘</kbd> + <kbd>Enter</kbd></dt><dd>{t('dialogs.help.shortcut.run')}</dd></div>
-            <div><dt><kbd>F5</kbd></dt><dd>{t('dialogs.help.shortcut.debugContinue')}</dd></div>
-            <div><dt><kbd>Shift</kbd> + <kbd>F5</kbd></dt><dd>{t('dialogs.help.shortcut.debugStop')}</dd></div>
-            <div><dt><kbd>F9</kbd></dt><dd>{t('dialogs.help.shortcut.toggleBreakpoint')}</dd></div>
-            <div><dt><kbd>F10</kbd></dt><dd>{t('dialogs.help.shortcut.stepOver')}</dd></div>
-            <div><dt><kbd>F11</kbd></dt><dd>{t('dialogs.help.shortcut.stepInto')}</dd></div>
-            <div><dt><kbd>Shift</kbd> + <kbd>F11</kbd></dt><dd>{t('dialogs.help.shortcut.stepOut')}</dd></div>
             <div><dt><kbd>Ctrl/⌘</kbd> + <kbd>S</kbd></dt><dd>{t('dialogs.help.shortcut.saveFile')}</dd></div>
             <div><dt><kbd>Ctrl/⌘</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd></dt><dd>{t('dialogs.help.shortcut.format')}</dd></div>
           </dl>
@@ -238,17 +232,16 @@ export function HelpModal({ open, onClose }: { open: boolean; onClose: () => voi
         <section>
           <h3>{t('dialogs.help.security')}</h3>
           <ul className="help-list">
-            <li>{t('dialogs.help.securityNsJail')}</li>
-            <li>{t('dialogs.help.securityTmpfs')}</li>
-            <li>{t('dialogs.help.securitySandbox')}</li>
-            <li>{t('dialogs.help.securityWhitelist')}</li>
-            <li>{t('dialogs.help.securityPtrace')}</li>
+            <li>{t('dialogs.help.securityWasm')}</li>
+            <li>{t('dialogs.help.securityImports')}</li>
+            <li>{t('dialogs.help.securityWorker')}</li>
+            <li>{t('dialogs.help.securityStorage')}</li>
           </ul>
           <h3>{t('dialogs.help.limits')}</h3>
           <ul className="help-list">
             <li>{t('dialogs.help.limitsSource')}</li>
             <li>{t('dialogs.help.limitsRuntime')}</li>
-            <li>{t('dialogs.help.limitsConcurrency')}</li>
+            <li>{t('dialogs.help.limitsFirstRun')}</li>
             <li>{t('dialogs.help.limitsDebug')}</li>
           </ul>
         </section>
