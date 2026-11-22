@@ -101,8 +101,12 @@ export function authenticateToken(token: string | undefined): Authenticated | nu
   return authenticateTokenHash(hashToken(token));
 }
 
-/** Same checks as authenticateToken, for WebSocket code that kept only the hash. */
-export function authenticateTokenHash(tokenHash: string): Authenticated | null {
+/**
+ * Same checks as authenticateToken, for WebSocket code that kept only the hash.
+ * `touch=false` validates without extending the idle timer (used by the WS
+ * sweeper, so an idle tab still expires after SESSION_IDLE_HOURS).
+ */
+export function authenticateTokenHash(tokenHash: string, touch = true): Authenticated | null {
   const found = findAuthSessionByTokenHash(tokenHash);
   if (!found) return null;
   const { session } = found;
@@ -113,7 +117,7 @@ export function authenticateTokenHash(tokenHash: string): Authenticated | null {
   // Re-read the user so a disabled account loses access on the next request.
   const user = getUserById(session.userId) ?? found.user;
   if (user.status !== 'active') return null;
-  if (now - session.lastSeenAt >= TOUCH_INTERVAL_MS) {
+  if (touch && now - session.lastSeenAt >= TOUCH_INTERVAL_MS) {
     touchAuthSession(session.id);
   }
   return { user: toAuthUser(user), userRecord: user, session };

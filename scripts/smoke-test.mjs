@@ -525,6 +525,48 @@ async function main() {
     assert.deepEqual(bobRuns.body.runs, []);
     log('cross-user run/restore access returns 404 and WS close 4403');
 
+    // Disabling an account must also tear down an already-open run socket.
+    await delay(1100);
+    const bobRunStart = await bob.request('/api/run', {
+      method: 'POST',
+      body: JSON.stringify({
+        files: { 'main.cpp': '#include <unistd.h>\nint main(){sleep(3);return 0;}\n' },
+        entry: 'main.cpp',
+        compiler: 'g++',
+        std: 'c++20',
+        opt: '-O0',
+        extraFlags: [],
+        stdin: '',
+        limits: { timeMs: 5000, memoryMb: 256, outputBytes: 65536 },
+      }),
+    });
+    assert.equal(bobRunStart.status, 202, JSON.stringify(bobRunStart.body));
+    const bobSocket = new WebSocket(BASE.replace('http', 'ws') + bobRunStart.body.wsPath, {
+      headers: { Cookie: bob.cookieHeader(), Origin: ORIGIN },
+    });
+    await new Promise((resolve, reject) => {
+      bobSocket.once('open', resolve);
+      bobSocket.once('error', reject);
+    });
+    const bobSocketClosed = new Promise((resolve) => bobSocket.once('close', (code) => resolve(code)));
+    const disableBob = await alice.request(`/api/admin/users/${createBob.body.user.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status: 'disabled' }),
+    });
+    assert.equal(disableBob.status, 200, JSON.stringify(disableBob.body));
+    assert.equal(await bobSocketClosed, 4401);
+    assert.equal((await bob.request('/api/project')).status, 401);
+    const enableBob = await alice.request(`/api/admin/users/${createBob.body.user.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status: 'active' }),
+    });
+    assert.equal(enableBob.status, 200);
+    await delay(3500); // let bob's sandbox run finish and release its slot
+    bob.cookies.clear();
+    const bobRelogin = await bob.login(BOB_USER, BOB_PASSWORD);
+    assert.equal(bobRelogin.status, 200);
+    log('disabling an account closes its live WebSocket with 4401');
+
     const compileError = await runProgram({ 'main.cpp': 'int main(){ return missing_symbol; }\n' });
     assert.equal(compileError.result.status, 'CE');
     assert.ok(compileError.result.diagnostics.some((item) => item.file === 'main.cpp' && item.severity === 'error'));

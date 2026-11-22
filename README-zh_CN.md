@@ -259,7 +259,7 @@ npm test                    # 端到端冒烟测试（需先 npm run build）
 ```
 
 脚本会启动隔离后端（临时 SQLite + 工作目录），通过环境变量引导管理员并**真实登录**（没有
-跳过鉴权的后门），执行 25 项检查：
+跳过鉴权的后门），执行 26 项检查：
 
 ```text
 ✓ backend and sandbox ready
@@ -271,6 +271,7 @@ npm test                    # 端到端冒烟测试（需先 npm run build）
 ✓ per-user run slot returns USER_BUSY while a run is active
 ✓ sandboxed compile and run
 ✓ cross-user run/restore access returns 404 and WS close 4403
+✓ disabling an account closes its live WebSocket with 4401
 ✓ compile diagnostics
 ✓ wall-clock timeout and process-group cleanup
 ✓ output cap
@@ -287,7 +288,7 @@ npm test                    # 端到端冒烟测试（需先 npm run build）
 ✓ password change revokes the old session and issues a new one
 ✓ logout clears the cookie and invalidates the session
 ✓ login flood is rate-limited
-25 checks passed.
+26 checks passed.
 ```
 
 本地化有两项专属检查：

@@ -491,7 +491,7 @@ npm run user:disable -- bob
 
 每个阶段都先写对应安全测试（未登录/越权/CSRF/枚举），再写功能。实际落地时，
 `tests/unit/*.test.ts` 覆盖密码、会话、登录限流、并发槽与数据迁移；`scripts/smoke-test.mjs`
-用真实登录串起双用户越权、CSRF、WS 拒绝、强制改密、会话轮换等 25 项端到端检查。
+用真实登录串起双用户越权、CSRF、WS 拒绝与撤销、强制改密、会话轮换等 26 项端到端检查。
 
 ## 15. 重点注意事项（按风险排序）
 
@@ -583,8 +583,8 @@ npm run user:disable -- bob
    审批如果要加，必须作为新的安全决策单独评审。
 2. **管理员 UI 后置**：管理员 HTTP API 已实现并有测试覆盖，但未做前端用户管理页。
 3. **WS 会话续验**：除升级时校验外，调试 WS 在转发每条消息、运行 WS 在发送每个事件前，
-   以及心跳（30 s）时都会限频复核会话；管理员禁用/改密后最多 5 秒内关闭 `4401`，
-   而不是等到连接自然断开。
+   另有 1 秒一次的定时复核（只读校验，不续期空闲超时）；管理员禁用/改密后通常在 1 秒内
+   关闭 `4401`，而不是等到连接自然断开。
 4. **首个账号继承全部无主项目**：优先保证旧数据不丢；`getProjectForUser` 仍按最早创建
    的项目工作。若仍有 `owner_id IS NULL` 的项目且已存在账号，业务 API 以 `503
    ORPHAN_PROJECTS` fail closed（health 与 `/api/auth/*` 保持可用，便于管理员修复）。
@@ -597,10 +597,10 @@ npm run user:disable -- bob
 - `npm run test:unit`：26 项，覆盖 scrypt 哈希/校验/参数升级、密码策略、登录限流与退避、
   会话创建/撤销/过期/空闲超时、账号禁用、改密轮换、首次登录迁移、运行历史按 project 隔离、
   每账号并发槽。
-- `npm test`（`scripts/smoke-test.mjs`）：25 项，真实 bootstrap 管理员并登录，覆盖未登录 401、
+- `npm test`（`scripts/smoke-test.mjs`）：26 项，真实 bootstrap 管理员并登录，覆盖未登录 401、
   缺失/跨站 Origin 403、HttpOnly/SameSite Cookie、DB 中只存 token/password 哈希、
   `data/` 0700 与 DB 0600、双用户项目隔离、跨用户 run/restore/debug 404 与 WS 4403/4401、
-  每账号运行与调试并发 429、强制改密、改密使旧会话失效、登出失效、登录洪水 429；
+  每账号运行与调试并发 429、禁用账号会关闭已打开的 WS（4401）、强制改密、改密使旧会话失效、登出失效、登录洪水 429；
   原有沙箱（TLE/OLE/MLE/逃逸/无网络/参数白名单）与 DAP 检查全部带登录 Cookie 跑通。
 - `npm run i18n:check`：443 个 key，中英一致，无未翻译文案。
 - `npm run i18n:ui`（需真实账号）：登录后英文界面零中文、语言切换与刷新保留、无页面错误。

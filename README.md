@@ -293,7 +293,7 @@ npm test                    # end-to-end smoke test (requires npm run build)
 ```
 
 The smoke test boots an isolated backend with a temporary SQLite database, bootstraps an admin
-through environment variables, and logs in for real (no auth bypass). It runs 25 checks:
+through environment variables, and logs in for real (no auth bypass). It runs 26 checks:
 
 ```text
 ✓ backend and sandbox ready
@@ -305,6 +305,7 @@ through environment variables, and logs in for real (no auth bypass). It runs 25
 ✓ per-user run slot returns USER_BUSY while a run is active
 ✓ sandboxed compile and run
 ✓ cross-user run/restore access returns 404 and WS close 4403
+✓ disabling an account closes its live WebSocket with 4401
 ✓ compile diagnostics
 ✓ wall-clock timeout and process-group cleanup
 ✓ output cap
@@ -321,7 +322,7 @@ through environment variables, and logs in for real (no auth bypass). It runs 25
 ✓ password change revokes the old session and issues a new one
 ✓ logout clears the cookie and invalidates the session
 ✓ login flood is rate-limited
-25 checks passed.
+26 checks passed.
 ```
 
 Localization has two dedicated checks:

@@ -673,13 +673,21 @@ async function main(): Promise<void> {
     });
   });
 
+  // A revoked/expired/disabled session must stop an already-open socket even
+  // if it is silent. One DB lookup per client per second is cheap at this scale.
+  const wsAuthSweeper = setInterval(() => {
+    for (const ws of wss.clients) {
+      const tracked = ws as WebSocket & { authTokenHash?: string };
+      if (tracked.authTokenHash && authenticateTokenHash(tracked.authTokenHash, false) === null) {
+        ws.close(4401, 'authentication required');
+      }
+    }
+  }, 1_000);
+  wsAuthSweeper.unref();
+
   const heartbeat = setInterval(() => {
     for (const ws of wss.clients) {
-      const tracked = ws as WebSocket & { isAlive?: boolean; authTokenHash?: string };
-      if (tracked.authTokenHash && authenticateTokenHash(tracked.authTokenHash) === null) {
-        ws.close(4401, 'authentication required');
-        continue;
-      }
+      const tracked = ws as WebSocket & { isAlive?: boolean };
       if (tracked.isAlive === false) {
         ws.terminate();
         continue;
@@ -716,6 +724,7 @@ async function main(): Promise<void> {
     shuttingDown = true;
     console.log(`[cpplab] shutting down (${signal})`);
     clearInterval(heartbeat);
+    clearInterval(wsAuthSweeper);
     clearInterval(rateSweeper);
     clearInterval(sessionCleaner);
     for (const ws of wss.clients) ws.close(1001, 'server shutting down');

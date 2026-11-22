@@ -230,7 +230,7 @@ DWARF: /workspace/main.cpp        ← 天然一致
 - **M5 多用户鉴权（已完成）**：数据迁移 + 账号 CLI、HTTP 登录/登出/改密、Cookie 会话 + CSRF、
   项目/运行/调试 owner 授权、WebSocket 鉴权、按账号配额、登录页/用户菜单/强制改密/本地存储
   按账号隔离。**验收**：双用户 A/B 互相看不到项目/历史/调试；未登录全 401；跨用户 404/4403；
-  `npm run test:unit` + `npm test`（25 项 smoke）+ `npm run i18n:check` + `npm run build` 全绿。
+  `npm run test:unit` + `npm test`（26 项 smoke）+ `npm run i18n:check` + `npm run build` 全绿。
   设计见 `docs/multi-user-auth.md`。
 
 每个里程碑内开发顺序：先写该模块的**沙箱/安全测试**（逃逸用例）→ 再写功能实现 → 最后写 UI → 通过验收再进下一阶段。M5 起同样先写鉴权测试（未登录/越权/CSRF/枚举），再写功能。
@@ -262,7 +262,7 @@ DWARF: /workspace/main.cpp        ← 天然一致
 | 21 | 反代后 Cookie 缺 Secure / `req.ip` 不可信 | 显式配置 `TRUST_PROXY=<跳数>`、`PUBLIC_ORIGIN`、`COOKIE_SECURE=auto` |
 | 22 | 失败登录逐条写审计被洪水打满 | 限流先于审计、单行限长、日志轮转 |
 | 23 | 登录对未知用户直接返回 | 时序枚举；未知用户名也跑一次 dummy scrypt |
-| 24 | 重置密码/禁用后旧 WS 仍收数据 | 转发前/心跳复核会话，撤销后关闭 4401 |
+| 24 | 重置密码/禁用后旧 WS 仍收数据 | 转发前与 1 秒定时复核会话（不续期），撤销后关闭 4401 |
 
 ## 10. 验收测试（每个 PR 必须能回答）
 
