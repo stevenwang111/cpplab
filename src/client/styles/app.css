@@ -2884,9 +2884,13 @@ kbd {
 }
 
 .auth-form .field input {
-  height: 36px;
+  /* Cancel the generic `.field input { flex: 1 }` so the explicit height wins
+     inside the column layout; 16px character box x 2.5 = 40px field height. */
+  flex: none;
+  height: 2.5em;
+  padding: 0 12px;
   font-family: var(--sans);
-  font-size: 12.5px;
+  font-size: 16px;
 }
 
 .auth-form-actions {
@@ -2897,7 +2901,7 @@ kbd {
 }
 
 .auth-submit {
-  height: 38px;
+  height: 40px;
   margin-top: 4px;
   font-size: 13px;
 }
