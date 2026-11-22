@@ -24,6 +24,7 @@ import { userRunSlots } from './util/userQuota.js';
 export interface PreparedRun {
   /** Owner of the project this run belongs to (authorization boundary). */
   ownerId: string;
+  ownerName: string;
   projectId: string;
   files: Record<string, string>;
   fileList: Array<{ path: string; content: string }>;
@@ -49,6 +50,7 @@ export class RunSession {
     readonly id: string,
     readonly createdAt: number,
     readonly ownerId: string,
+    readonly ownerName: string,
     readonly projectId: string,
     private readonly releaseSlot: () => void,
   ) {}
@@ -99,7 +101,14 @@ export function startRun(prepared: PreparedRun): { runId: string } | null {
   const releaseSlot = userRunSlots.tryAcquire(prepared.ownerId);
   if (!releaseSlot) return null;
   const id = newId();
-  const session = new RunSession(id, Date.now(), prepared.ownerId, prepared.projectId, releaseSlot);
+  const session = new RunSession(
+    id,
+    Date.now(),
+    prepared.ownerId,
+    prepared.ownerName,
+    prepared.projectId,
+    releaseSlot,
+  );
   sessions.set(id, session);
   void executeRun(session, prepared).catch((error) => {
     const message = errorText(error, prepared.locale);
@@ -228,6 +237,9 @@ function finishRun(session: RunSession, result: RunResult, prepared: PreparedRun
     audit({
       event: 'run.finish',
       runId: session.id,
+      userId: session.ownerId,
+      username: session.ownerName,
+      projectId: session.projectId,
       status: result.status,
       timeMs: result.timeMs,
       memoryKb: result.memoryKb,
@@ -299,6 +311,7 @@ export function attachRunSocket(
 
 export function buildPrepared(input: {
   ownerId: string;
+  ownerName: string;
   projectId: string;
   files: Record<string, string>;
   entry: string;

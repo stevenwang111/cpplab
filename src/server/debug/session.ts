@@ -28,6 +28,7 @@ const debugSemaphore = new Semaphore(config.limits.maxDebugSessions);
 export interface DebugStartInput {
   /** Owner of the project this debug session belongs to. */
   ownerId: string;
+  ownerName: string;
   projectId: string;
   files: Record<string, string>;
   fileList: Array<{ path: string; content: string }>;
@@ -118,6 +119,7 @@ class DebugSession {
     readonly id: string,
     readonly workdir: string,
     readonly ownerId: string,
+    readonly ownerName: string,
     readonly projectId: string,
     /** Messages shown to this session's client, in its UI language. */
     readonly locale: Locale,
@@ -339,7 +341,7 @@ class DebugSession {
     cleanupWorkdir(this.workdir);
     try {
       endDebugSession(this.id);
-      audit({ event: 'debug.end', sessionId: this.id });
+      audit({ event: 'debug.end', sessionId: this.id, userId: this.ownerId, username: this.ownerName });
     } catch {
       // Ignore.
     }
@@ -417,6 +419,7 @@ export async function startDebugSession(input: DebugStartInput): Promise<DebugSt
       id,
       compile.workdir,
       input.ownerId,
+      input.ownerName,
       input.projectId,
       input.locale,
       handle,

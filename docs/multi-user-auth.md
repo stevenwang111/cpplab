@@ -391,13 +391,13 @@ npm run user:disable -- bob
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `AUTH_ENABLED` | `1` | 设为 `0` 仅用于本地开发/测试？**不建议**提供永久后门 |
+| `AUTH_ENABLED` | — | **未实现（有意）**：不提供任何鉴权后门，本地开发也必须登录 |
 | `SESSION_IDLE_HOURS` | `8` | 空闲超时 |
 | `SESSION_ABSOLUTE_DAYS` | `7` | 绝对超时 |
 | `COOKIE_SECURE` | `auto` | `auto` 按请求协议；反代后需 `TRUST_PROXY` |
 | `TRUST_PROXY` | `0` | 反代跳数；只有确认代理可信时才设置 |
 | `PUBLIC_ORIGIN` | — | 反代后浏览器可见的 origin，用于 Origin 校验 |
-| `ALLOW_REGISTRATION` | `0` | 默认关闭；若开启需邀请码/管理员审批 |
+| `ALLOW_REGISTRATION` | — | **未实现（有意）**：本期不开放注册，账号只能由管理员创建 |
 | `ALLOW_BOOTSTRAP` | `0` | 仅首次建管理员用 |
 
 - `HOST=0.0.0.0` 现在有了实际意义，但必须配合 TLS 或受信内网；README 要改掉
@@ -571,15 +571,16 @@ npm run user:disable -- bob
 | HTTP | `src/server/main.ts` | 鉴权先于 3 MiB body parser；登录独立 8 KiB parser；health 不再泄露调试会话；admin API；按账号限流/并发槽；跨用户 404 |
 | 运行/调试 | `src/server/runService.ts`、`src/server/debug/session.ts` | `RunSession`/`DebugSession` 持有 `ownerId`/`projectId`；WS 附着前校验归属；会话被撤销后 WS 在转发下一条消息/事件时关闭 4401 |
 | 配额 | `src/server/util/userQuota.ts` | 每账号 1 运行 / 1 调试；全局信号量仍是硬上限 |
-| 审计 | `src/server/util/audit.ts` | 登录、会话撤销、用户管理、运行/调试事件；单行 ≤8 KiB，10 MiB × 5 轮转 |
+| 审计 | `src/server/util/audit.ts` | 登录、会话撤销、用户管理、运行/调试事件（含 userId/username）；单行 ≤8 KiB，10 MiB × 5 轮转 |
 | CLI | `scripts/user-cli.mts` | `user:add/list/passwd/disable/enable/role`；首个账号自动继承遗留项目 |
 | 客户端 | `src/client/App.tsx`、`components/AuthScreens.tsx`、`TopBar.tsx`、`storage.ts` | `me → 登录页 → 工作台`；强制改密；用户菜单；统一 401；localStorage 按 userId 命名空间并迁移旧键；WS 4401/4403 处理 |
 | 配置/文档 | `src/server/config.ts`、README、AGENTS.md | 会话/代理/Cookie/bootstrap 环境变量；部署与验收说明 |
 
 ### 18.2 与提案的差异（均为有意的实现选择）
 
-1. **没有提供 `AUTH_ENABLED=0` 后门**：提案已注明“不建议提供永久后门”，实现中直接不提供；
-   本地开发同样必须登录。
+1. **没有提供 `AUTH_ENABLED=0` 后门，也没有实现 `ALLOW_REGISTRATION`**：§16 已确认不开放
+   注册；§11.2 中的 `AUTH_ENABLED` 也被有意省略，本地开发同样必须真实登录。注册/邀请码/
+   审批如果要加，必须作为新的安全决策单独评审。
 2. **管理员 UI 后置**：管理员 HTTP API 已实现并有测试覆盖，但未做前端用户管理页。
 3. **WS 会话续验**：除升级时校验外，调试 WS 在转发每条消息、运行 WS 在发送每个事件前，
    以及心跳（30 s）时都会限频复核会话；管理员禁用/改密后最多 5 秒内关闭 `4401`，
@@ -593,8 +594,9 @@ npm run user:disable -- bob
 
 ### 18.3 验收证据
 
-- `npm run test:unit`：25 项，覆盖 scrypt 哈希/校验/参数升级、密码策略、登录限流与退避、
-  会话创建/撤销、账号禁用、改密轮换、首次登录迁移、运行历史按 project 隔离、每账号并发槽。
+- `npm run test:unit`：26 项，覆盖 scrypt 哈希/校验/参数升级、密码策略、登录限流与退避、
+  会话创建/撤销/过期/空闲超时、账号禁用、改密轮换、首次登录迁移、运行历史按 project 隔离、
+  每账号并发槽。
 - `npm test`（`scripts/smoke-test.mjs`）：25 项，真实 bootstrap 管理员并登录，覆盖未登录 401、
   缺失/跨站 Origin 403、HttpOnly/SameSite Cookie、DB 中只存 token/password 哈希、
   `data/` 0700 与 DB 0600、双用户项目隔离、跨用户 run/restore/debug 404 与 WS 4403/4401、

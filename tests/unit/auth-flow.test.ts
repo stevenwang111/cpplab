@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import type { Request } from 'express';
+import { DatabaseSync } from 'node:sqlite';
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cpplab-auth-flow-'));
 process.env.DB_PATH = path.join(tempDir, 'flow.db');
@@ -114,6 +115,26 @@ test('the last admin cannot be disabled or demoted through the service', () => {
   assert.throws(() => service.updateUserRole(actor, actor.id, 'user'), /administrator/i);
   const listed = service.listAdminUsers();
   assert.ok(listed.every((user) => !('passwordHash' in user) && !('password_hash' in user)));
+});
+
+test('expired and idle sessions are rejected even if the row exists', () => {
+  const root = db.getUserByUsername('root')!;
+  const expired = db.createAuthSession({
+    userId: root.id,
+    tokenHash: 'expired-token-hash',
+    expiresAt: Date.now() - 1,
+  });
+  assert.equal(session.authenticateTokenHash(expired.tokenHash), null);
+
+  const idle = db.createAuthSession({
+    userId: root.id,
+    tokenHash: 'idle-token-hash',
+    expiresAt: Date.now() + 60 * 60 * 1000,
+  });
+  const raw = new DatabaseSync(process.env.DB_PATH!);
+  raw.prepare('UPDATE auth_sessions SET last_seen_at = ? WHERE id = ?').run(Date.now() - 9 * 60 * 60 * 1000, idle.id);
+  raw.close();
+  assert.equal(session.authenticateTokenHash(idle.tokenHash), null);
 });
 
 test('cookie helpers keep the token HttpOnly and never put it in the URL', () => {

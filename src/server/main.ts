@@ -427,6 +427,7 @@ async function main(): Promise<void> {
       }
       const prepared = buildPrepared({
         ownerId: req.user!.id,
+        ownerName: req.user!.username,
         projectId: project.id,
         files: validated.files.map,
         entry: validated.files.entry,
@@ -521,6 +522,7 @@ async function main(): Promise<void> {
     }
     const outcome = await startDebugSession({
       ownerId: req.user!.id,
+      ownerName: req.user!.username,
       projectId: project.id,
       files: validated.files.map,
       fileList: validated.files.files,
@@ -556,7 +558,7 @@ async function main(): Promise<void> {
       throw new ApiError(404, 'SESSION_NOT_FOUND', msg('err.debugSessionNotFound'));
     }
     await stopDebugSession(session.id);
-    audit({ event: 'debug.stop', sessionId: session.id, userId: req.user!.id });
+    audit({ event: 'debug.stop', sessionId: session.id, userId: req.user!.id, username: req.user!.username });
     res.json({ ok: true });
   }));
 
