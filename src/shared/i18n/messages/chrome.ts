@@ -20,12 +20,12 @@ const zhCN = {
   'chrome.topbar.history': '运行记录',
   'chrome.topbar.settings': '编辑器设置',
   'chrome.topbar.help': '帮助与快捷键',
-  'chrome.topbar.workspace': '本地单用户工作区',
+  'chrome.topbar.workspace': 'CppLab 工作区',
 
   // StatusBar
   'chrome.statusbar.indent': '空格: 4',
   'chrome.statusbar.sandbox': 'nsjail 隔离',
-  'chrome.statusbar.offline': '无网络',
+  'chrome.statusbar.offline': '沙箱无外网',
   'chrome.statusbar.debug.idle': '调试未启动',
   'chrome.statusbar.debug.starting': '调试启动中',
   'chrome.statusbar.debug.running': '调试运行中',
@@ -76,12 +76,12 @@ const en: Record<keyof typeof zhCN, string> = {
   'chrome.topbar.history': 'Run history',
   'chrome.topbar.settings': 'Editor settings',
   'chrome.topbar.help': 'Help and keyboard shortcuts',
-  'chrome.topbar.workspace': 'Local single-user workspace',
+  'chrome.topbar.workspace': 'CppLab workspace',
 
   // StatusBar
   'chrome.statusbar.indent': 'Spaces: 4',
   'chrome.statusbar.sandbox': 'nsjail isolation',
-  'chrome.statusbar.offline': 'No network',
+  'chrome.statusbar.offline': 'No external sandbox network',
   'chrome.statusbar.debug.idle': 'Debug not started',
   'chrome.statusbar.debug.starting': 'Debug starting',
   'chrome.statusbar.debug.running': 'Debug running',

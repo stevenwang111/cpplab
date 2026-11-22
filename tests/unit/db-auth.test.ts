@@ -9,7 +9,7 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cpplab-auth-test-'));
 const dbPath = path.join(tempDir, 'legacy.db');
 process.env.DB_PATH = dbPath;
 
-// Build a pre-M5 database: one project and one file, no users, version 0.
+// Build a legacy database: one project and one file, no users, version 0.
 const legacy = new DatabaseSync(dbPath);
 legacy.exec(`
   PRAGMA journal_mode = WAL;

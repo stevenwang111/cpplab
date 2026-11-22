@@ -17,4 +17,4 @@ Manual acceptance on the browser side:
 - Watch refreshes after every `stopped`; the REPL can only evaluate while paused.
 - 5 minutes idle / 30 minutes hard timeout closes the session, and the working directory and process group are reclaimed.
 
-Debugging notes: the MVP does not provide an interactive stdin to the debugged program. Programs that read `std::cin` will wait for input while debugging; verify through the "Input" panel first, or switch to fixed input before debugging.
+Debugging notes: interactive stdin is not available to the debugged program. Programs that read `std::cin` will wait for input while debugging; verify through the "Input" panel first, or switch to fixed input before debugging.

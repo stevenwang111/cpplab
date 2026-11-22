@@ -639,7 +639,7 @@ async function main() {
     assert.equal(network.result.status, 'OK');
     assert.match(network.result.stdout, /connect=-1/);
     assert.ok(network.result.stderr === '' || /unreachable|denied/i.test(network.result.stderr));
-    log('network namespace has no route');
+    log('sandboxed external connection attempt fails');
 
     const blockedFlag = await runProgram({ 'main.cpp': 'int main(){return 0;}\n' }, { extraFlags: ['-fplugin=/tmp/x.so'] });
     assert.equal(blockedFlag.httpStatus, 400);

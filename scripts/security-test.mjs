@@ -1,22 +1,19 @@
 #!/usr/bin/env node
 /**
- * Security regression tests for the fixes documented in
- * docs/security-audit-2026-11-05.md (F-01 … F-07).
+ * Sandbox and WebSocket security regression tests.
  *
  * Usage:
  *   npm run build
  *   node scripts/security-test.mjs
  *
  * Like smoke-test.mjs, this spawns an isolated backend (port 3102, temporary
- * DB/work root) and drives the public API. Covers the automated items of the
- * audit's §7 regression checklist:
- *   1. rootfs is read-only for the sandbox            (F-02)
- *   2. sandbox runs as host uid 10000, not the service user (F-01)
- *   3. x32 ABI + clone(CLONE_NEWUSER) are killed      (F-03)
- *   4. `.runstat` FIFO cannot block the event loop    (F-05)
- *   5. format never reads sandbox-controlled files    (F-04)
- *   6. ensureRootfs refuses planted symlinks          (F-06)
- *   7. cross-origin WebSocket upgrades are rejected   (F-07)
+ * DB/work root) and drives the public API. Covers:
+ *   1. read-only rootfs and sandbox host-UID isolation
+ *   2. x32 ABI and clone(CLONE_NEWUSER) rejection
+ *   3. nonblocking reads of untrusted `.runstat` files
+ *   4. formatter input/output isolation
+ *   5. rootfs symlink defenses
+ *   6. cross-origin WebSocket rejection
  */
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
@@ -28,6 +25,8 @@ import WebSocket from 'ws';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const PORT = Number(process.env.SEC_PORT ?? 3102);
 const BASE = `http://127.0.0.1:${PORT}`;
+const ADMIN_USER = 'security-admin';
+const ADMIN_PASSWORD = 'security-test-password';
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cpplab-sec-'));
 const dbPath = path.join(tempDir, 'sec.db');
 const workRoot = path.join(tempDir, 'work');
@@ -35,6 +34,7 @@ const rootfsDir = path.join(ROOT, 'data', 'sandbox', 'rootfs');
 
 let serverProcess;
 let passed = 0;
+let sessionCookie = '';
 
 function log(name, detail = '') {
   passed += 1;
@@ -44,10 +44,20 @@ function log(name, detail = '') {
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function request(endpoint, options = {}) {
+  const method = options.method ?? 'GET';
+  const headers = { 'Content-Type': 'application/json', ...(options.headers ?? {}) };
+  if (method !== 'GET' && options.origin !== false) headers.Origin = options.origin ?? BASE;
+  if (sessionCookie && options.cookie !== false) headers.Cookie = sessionCookie;
   const response = await fetch(BASE + endpoint, {
     ...options,
-    headers: { 'Content-Type': 'application/json', ...(options.headers ?? {}) },
+    method,
+    headers,
   });
+  const cookies = response.headers.getSetCookie?.() ?? [];
+  for (const raw of cookies) {
+    const pair = raw.split(';')[0] ?? '';
+    if (pair.startsWith('cpplab_session=')) sessionCookie = pair;
+  }
   let body;
   try {
     body = await response.json();
@@ -95,7 +105,9 @@ async function runProgram(files, options = {}) {
 
 function waitForRun(wsPath) {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(BASE.replace('http', 'ws') + wsPath);
+    const socket = new WebSocket(BASE.replace('http', 'ws') + wsPath, {
+      headers: { Cookie: sessionCookie, Origin: BASE },
+    });
     const timer = setTimeout(() => {
       socket.close();
       reject(new Error('run timeout'));
@@ -164,6 +176,9 @@ async function main() {
       HOST: '127.0.0.1',
       DB_PATH: dbPath,
       WORK_ROOT: workRoot,
+      ALLOW_BOOTSTRAP: '1',
+      BOOTSTRAP_ADMIN_USERNAME: ADMIN_USER,
+      BOOTSTRAP_ADMIN_PASSWORD: ADMIN_PASSWORD,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -175,9 +190,15 @@ async function main() {
     const health = await waitForServer();
     assert.equal(health.ok, true);
     assert.equal(health.capabilities.sandbox.available, true, health.capabilities.sandbox.detail);
-    log('backend and sandbox ready');
+    const login = await request('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: ADMIN_USER, password: ADMIN_PASSWORD }),
+    });
+    assert.equal(login.status, 200, JSON.stringify(login.body));
+    assert.ok(sessionCookie, 'login did not issue a session cookie');
+    log('backend, sandbox, and authenticated session ready');
 
-    // ---- 1+2: uid isolation and read-only rootfs (F-01, F-02) ------------
+    // ---- 1: uid isolation and read-only rootfs --------------------------
     const before = listRootfsEntries();
     const probe = await runProgram({
       'main.cpp': `#include <unistd.h>
@@ -222,7 +243,7 @@ int main() {
     );
     log('jailed processes run as host uid 10000 (not the service user)');
 
-    // ---- 3: x32 ABI and clone(CLONE_NEWUSER) are killed (F-03) ----------
+    // ---- 2: x32 ABI and clone(CLONE_NEWUSER) are killed -----------------
     const seccomp = await runProgram({
       'main.cpp': `#define _GNU_SOURCE
 #include <sched.h>
@@ -271,7 +292,7 @@ int main() {
     assert.match(seccompResult.stdout, /plain_fork=1/);
     log('x32 mount/unshare/open_by_handle_at and clone(NEWUSER) are blocked');
 
-    // ---- 4: .runstat FIFO cannot block the service (F-05) ---------------
+    // ---- 3: .runstat FIFO cannot block the service ----------------------
     const fifo = await runProgram(
       { 'main.cpp': '#include <sys/stat.h>\nint main(){ mkfifo("/workspace/.runstat", 0666); return 0; }\n' },
       { timeMs: 2000 },
@@ -291,7 +312,7 @@ int main() {
     assert.ok(fifoResult, 'fifo run produced no result');
     log('`.runstat` FIFO does not block the event loop', `run status=${fifoResult.status}`);
 
-    // ---- 5: format result comes from stdin/stdout only (F-04) -----------
+    // ---- 4: format result comes from stdin/stdout only ------------------
     const format = await request('/api/format', {
       method: 'POST',
       body: JSON.stringify({ file: 'main.cpp', content: 'int main(){int x=1; if(x){return 0;} return 1;}' }),
@@ -302,7 +323,7 @@ int main() {
     assert.doesNotMatch(format.body.formatted, /CANARY|root:x:0:0/, 'format leaked host file content');
     log('format pipeline reads no sandbox-controlled file');
 
-    // ---- 6: ensureRootfs refuses planted symlinks (F-06) ----------------
+    // ---- 5: ensureRootfs refuses planted symlinks -----------------------
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'cpplab-sec-rootfs-'));
     fs.mkdirSync(path.join(scratch, 'data', 'sandbox'), { recursive: true });
     const probeRun = spawnSync(
@@ -314,10 +335,10 @@ int main() {
     fs.rmSync(scratch, { recursive: true, force: true });
     log('ensureRootfs refuses planted symlinks');
 
-    // ---- 7: cross-origin WS upgrades are rejected (F-07) ----------------
+    // ---- 6: cross-origin WS upgrades are rejected ----------------------
     const evil = await new Promise((resolve) => {
       const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/run/00000000-0000-0000-0000-000000000000`, {
-        headers: { Origin: 'http://evil.example' },
+        headers: { Cookie: sessionCookie, Origin: 'http://evil.example' },
       });
       let opened = false;
       ws.on('open', () => {
@@ -331,9 +352,12 @@ int main() {
     assert.equal(evil.opened, false, 'cross-origin WebSocket upgrade was accepted');
     const sameOrigin = await new Promise((resolve) => {
       const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/run/00000000-0000-0000-0000-000000000000`, {
-        headers: { Origin: `http://127.0.0.1:${PORT}` },
+        headers: { Cookie: sessionCookie, Origin: BASE },
       });
-      ws.on('open', () => resolve(true));
+      ws.on('open', () => {
+        ws.close();
+        resolve(true);
+      });
       ws.on('error', () => resolve(false));
     });
     assert.equal(sameOrigin, true, 'same-origin WebSocket upgrade was rejected');

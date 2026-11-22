@@ -56,7 +56,7 @@ function normalizeUsername(username: string): string {
 }
 
 /**
- * Login protection runs *before* scrypt (multi-user-auth.md §7.2):
+ * Login protection runs *before* scrypt:
  *   - IP: 10 attempts / minute
  *   - username: 5 attempts / minute
  *   - consecutive failures add a 1m → 5m → 15m cooldown, never a permanent lock

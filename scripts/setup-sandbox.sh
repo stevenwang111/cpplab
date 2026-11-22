@@ -16,8 +16,8 @@ fi
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
 
-# F-01: the jailed process runs as this *host* uid. It must never be the
-# service user, otherwise any sandbox escape is a service-user compromise.
+# The jailed process runs as this *host* uid. It must never be the service
+# user, otherwise any sandbox escape is a service-user compromise.
 SANDBOX_UID="${SANDBOX_UID:-10000}"
 if [[ "$(id -u)" == "$SANDBOX_UID" ]]; then
   echo "ERROR: the service uid ($(id -u)) equals SANDBOX_UID ($SANDBOX_UID)." >&2

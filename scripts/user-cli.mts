@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Local account administration. This is the primary management path in the
- * first release (multi-user-auth.md §11.1); there is no public registration.
+ * account administration; there is no public registration.
  *
  * Usage:
  *   npm run user:add -- alice --admin

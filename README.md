@@ -52,8 +52,9 @@ npm start                   # single-process start, default http://127.0.0.1:300
 ```
 
 There is no anonymous registration: every account is created by an administrator, first via the
-CLI and afterwards either via `npm run user:add` or `POST /api/admin/users`. If the existing
-database has a legacy `playground` project, the **first** account adopts it automatically.
+CLI and afterwards either via `npm run user:add` or `POST /api/admin/users`. The **first** account
+adopts every project without an owner, including a legacy `playground` project. If ownerless
+projects remain after accounts exist, business API requests fail closed with `503 ORPHAN_PROJECTS`.
 
 Development mode (Vite HMR + tsx backend):
 
@@ -64,7 +65,7 @@ npm run dev                 # client at http://127.0.0.1:5173, API/WS proxied to
 > `sandbox:setup` installs `nsjail` as `4755` (setuid root) and creates 4 device nodes under
 > `data/sandbox/dev/`. This is a simplification for a single-machine / intranet setup; if there
 > are other untrusted local users on the host, prefer running the backend as root and restoring
-> nsjail to normal permissions. See "Security notes & environment differences".
+> nsjail to normal permissions. See "Sandbox implementation notes".
 
 ### Environment variables
 
@@ -75,6 +76,8 @@ npm run dev                 # client at http://127.0.0.1:5173, API/WS proxied to
 | `DB_PATH` | `data/cpplab.db` | SQLite path (password hashes and sessions live here) |
 | `WORK_ROOT` | `$TMPDIR/cpplab-work` | Root of per-task scratch workspaces; tmpfs recommended |
 | `NSJAIL_PATH` | auto-detect | nsjail executable |
+| `SANDBOX_UID` | `10000` | Host UID used by jailed processes; must differ from the service UID |
+| `SANDBOX_GID` | `10000` | Host GID used by jailed processes and sandbox device nodes |
 | `LLDB_DAP_PATH` | auto-detect | lldb-dap path |
 | `DUMB_INIT_PATH` | auto-detect | dumb-init path (exec directly if missing) |
 | `CLANG_FORMAT_PATH` | auto-detect | clang-format path |
@@ -101,10 +104,11 @@ npm run user:disable -- bob          # or user:enable / user:role
   before upgrades (it contains password hashes and source snapshots).
 - For LAN or internet use, put the backend behind an HTTPS reverse proxy. Set
   `TRUST_PROXY=1`, `PUBLIC_ORIGIN=https://your.site`, and leave `COOKIE_SECURE=auto` (or force
-  `always`). The proxy must forward `Cookie` and `Origin` headers and upgrade WebSocket requests;
-  otherwise the API returns `403 CSRF_ORIGIN` and WebSocket login fails.
-- Non-browser API clients must send `Content-Type: application/json` and an `Origin` header
-  matching the site for every `POST` / `PATCH` / `DELETE`; this is the CSRF guard.
+  `always`). The proxy must forward `Cookie` and `Origin` headers and upgrade WebSocket requests.
+  Missing `Origin` is rejected for state-changing HTTP requests; preserve it on WebSocket upgrades
+  so cross-site browser connections can be checked.
+- Non-browser API clients must send an `Origin` header matching the site for every state-changing
+  request. Send `Content-Type: application/json` when the endpoint expects a JSON body.
 - `TRUST_PROXY` is a hop count, not a boolean. Behind one nginx/Caddy, `TRUST_PROXY=1` lets
   Express read `X-Forwarded-For` / `X-Forwarded-Proto`; setting it to `true` would accept forged
   client IPs and defeat per-IP login limits.
@@ -124,7 +128,7 @@ Single-process Node.js (Express + ws + node:sqlite)
   ├─ Compile: nsjail → dumb-init → g++/clang++ → /workspace/prog
   ├─ Run:     nsjail → dumb-init → /usr/bin/time → /workspace/prog
   ├─ Debug:   nsjail → dumb-init → lldb-dap (stdio ↔ DAP WebSocket)
-  └─ Rate limit: per IP 1 req/s, burst 5; per account; login IP/username windows + backoff
+  └─ Rate limit: per IP 1 req/s, burst 5; run/format/debug-start per account; login IP/username windows + backoff
 ```
 
 ### Directory layout
@@ -162,7 +166,7 @@ scripts/user-cli.mts      local account administration CLI
 | `POST` | `/api/auth/login` | public login (8 KiB body, IP + username limiter) |
 | `GET` | `/api/auth/me` | current safe user |
 | `POST` | `/api/auth/logout` | revoke the current session |
-| `POST` | `/api/auth/password` | verify the old password, revoke other sessions, rotate the cookie |
+| `POST` | `/api/auth/password` | verify old password, revoke the current session, issue a replacement cookie |
 | `GET/POST/PATCH` | `/api/admin/users[...]` | admin-only account create / list / status / role / reset |
 | `GET` | `/api/project` | current account's project, files, capabilities |
 | `PATCH` | `/api/project` | update entry / compiler / standard / optimization / name |
@@ -170,6 +174,7 @@ scripts/user-cli.mts      local account administration CLI
 | `DELETE` | `/api/files/*` | delete a file (entry file and the last file are protected) |
 | `POST` | `/api/format` | clang-format inside the sandbox |
 | `POST` | `/api/run` | 202 + `runId` + `wsPath` |
+| `GET` | `/api/run/:id` | active run state or completed result |
 | `GET` | `/api/runs` | run-history summaries |
 | `GET` | `/api/runs/:id` | run detail (including source snapshot) |
 | `POST` | `/api/runs/:id/restore` | restore a historical snapshot |
@@ -185,8 +190,7 @@ cookie and check the run/debug owner before attaching; close codes are `4401` (n
 
 ## Security model
 
-Where the seven non-negotiable items of [`AGENTS.md`](AGENTS.md) §3 land in this
-implementation:
+The sandbox implementation provides these boundaries:
 
 1. **Compilation also runs in the sandbox**: `compileWorkspace` uses the same nsjail launcher as
    the run path, with compile-specific cgroup quotas.
@@ -198,14 +202,16 @@ implementation:
 4. **Kill the process group**: nsjail is started with `setsid`; the watchdog first SIGTERMs the
    whole process group, then SIGKILLs by `/proc` parent-child relations so no init inside the
    pid namespace is left behind.
-5. **No network**: nsjail creates a fresh network namespace by default — no interfaces, no
-   routes.
-6. **Read-only rootfs + per-task workspace**: `/usr` is a read-only bind, `/workspace` is a
-   directory created per task, and `/tmp` / `/dev/shm` inside the jail are tmpfs; rootfs
-   directories are mode 0555. Put `WORK_ROOT` on a tmpfs so the capacity limit is enforced by
-   the kernel directly.
-7. **no-new-privs + non-root**: nsjail enables `no_new_privs` by default, uid/gid inside the
-   jail is 10000, capabilities are dropped; `dumb-init` acts as PID 1 forwarding signals.
+5. **No external network**: each jail gets a network namespace; compile/run seccomp policies also
+   reject network socket syscalls. The debug policy allows the socket operations LLDB needs, but
+   the namespace has no external route.
+6. **Read-only rootfs + per-task workspace**: nsjail runs without `--rw`; the chroot rootfs is
+   read-only, `/usr` is a read-only bind, and `/workspace` is a per-task writable bind. `/tmp` and
+   `/dev/shm` inside the jail are tmpfs. Put `WORK_ROOT` on a tmpfs so the capacity limit is
+   enforced by the kernel directly.
+7. **no-new-privs + non-root**: nsjail enables `no_new_privs` by default and drops capabilities.
+   User namespaces are disabled; jailed processes run as host UID/GID `10000` by default, which
+   must differ from the service UID. `dumb-init` forwards signals as PID 1.
 
 Multi-user layer:
 
@@ -217,8 +223,9 @@ Multi-user layer:
   Each account has exactly one active session: login/password change revoke the old session and
   insert the new one in one transaction (a unique partial index enforces the invariant), so a
   second device signs the first one out. Admin disables/resets revoke every session.
-- **CSRF**: every non-GET `/api` request must carry a same-origin `Origin` (including login).
-  WebSocket upgrades validate `Origin` too.
+- **CSRF**: state-changing `/api` requests must carry a same-origin `Origin` (including login).
+  Browser WebSocket upgrades validate `Origin`; non-browser clients may omit it but still require a
+  valid session cookie.
 - **Authorization**: the client never sends a project id. Every query uses the signed-in user's
   project, and run/debug sessions carry `ownerId`; cross-user access is `404`/`4403`.
 - **Fairness**: per-account run/debug slots (`USER_BUSY` / `DEBUG_BUSY`) on top of the global
@@ -238,18 +245,17 @@ Additional measures:
 - Audit log written to `data/runtime/audit.log` (login success/failure, session revocation, user
   changes, run/debug lifecycle, source hash); passwords, tokens and bodies are never logged.
 
-### Security notes & environment differences
+### Sandbox implementation notes
 
-The project follows its intended design; the following are trade-offs made for specific kernel
-versions and local toolchains, each explained in code comments:
+Current configuration details:
 
-| Design | Implementation | Reason |
+| Area | Current behavior | Reason |
 |---|---|---|
-| Debug `pids_max=32` | `256` | LLVM 21's lldb-dap thread pool fails `pthread_create` at 32 tasks |
-| rootfs remounted read-only | `--rw` + rootfs dirs 0555 / files 0444 | On the current kernel, remounting a host bind inside a setuid nsjail user namespace returns EPERM; directory modes still prevent writes |
-| `/dev/*` injected as tmpfs | bind host `data/sandbox/dev` device nodes | Device nodes owned by an outside uid in a userns cause `open(O_CREAT)` to return EACCES |
-| Debug seccomp only lifts `ptrace` | also allows `setuid/setgid/setresuid/setresgid` | lldb's fork launcher calls `setgid(getgid())`, otherwise killed by SIGSYS |
-| `socket()` should fail | socket creation allowed, `connect()` has no route | An empty Linux network namespace permits creating sockets; the no-network goal is guaranteed by the netns |
+| Debug process limit | `pids_max=256` | Allows the lldb-dap thread pool to start |
+| Root filesystem | Read-only chroot; `/workspace` and tmpfs mounts are writable | Jailed processes use a host UID distinct from the service account |
+| `/dev` | tmpfs with host `data/sandbox/dev` device nodes bind-mounted into it | LLDB's launcher needs sandbox-owned device nodes, including `/dev/null` |
+| Debug seccomp | Allows `ptrace`, selected identity changes, and required local socket operations | LLDB's fork launcher calls `setgid(getgid())`; its adapter also needs local IPC |
+| Network syscalls | Compile/run/format seccomp rejects them; debug allows a restricted set in a network namespace with no external route | The smoke check asserts a connection attempt fails, without attributing it to one boundary |
 
 Other limitations:
 
@@ -259,14 +265,16 @@ Other limitations:
   `127.0.0.1` + an SSH tunnel; the default listener is `127.0.0.1` only.
 - setuid nsjail means any local user on the host can execute nsjail; on multi-user hosts
   prefer running the backend as root.
+- The sandbox runs as the configured host UID/GID (`SANDBOX_UID` / `SANDBOX_GID`), not in a
+  user-namespace identity map. Keep the sandbox UID distinct from the service UID.
 - Run workspaces live under the host `WORK_ROOT`. If it is not a tmpfs, `fsize`, task
   lifecycle, and cleanup still bound disk usage, but capacity is not kernel-enforced the way a
   true per-task tmpfs is.
-- The debug MVP does **not support interactive stdin**. Programs reading `std::cin` will block
+- Debugging does **not support interactive stdin**. Programs reading `std::cin` will block
   while debugging — validate the logic via the "Input" panel first, or switch to fixed input
   before debugging.
-- Not implemented (later / optional scope): clangd LSP, conditional breakpoints,
-  `setVariable`, multi-thread UI, `rr` reverse debugging.
+- Unsupported features include clangd LSP, conditional breakpoints, `setVariable`, multi-thread
+  UI, and `rr` reverse debugging.
 - The sandbox's isolation ceiling is still the host kernel's syscall surface; the threat model
   accepts this.
 
@@ -290,44 +298,22 @@ npm run build
 node scripts/smoke-test.mjs
 ```
 
+Optional sandbox/WebSocket regression checks:
+
+```bash
+node scripts/security-test.mjs
+```
+
 ```bash
 npm run test:unit           # password/session/authz/migration unit tests (node --test + tsx)
 npm test                    # end-to-end smoke test (requires npm run build)
 ```
 
 The smoke test boots an isolated backend with a temporary SQLite database, bootstraps an admin
-through environment variables, and logs in for real (no auth bypass). It runs 27 checks:
-
-```text
-✓ backend and sandbox ready
-✓ unauthenticated access and Origin enforcement
-✓ login, uniform failure and HttpOnly session cookie
-✓ token/password hashes at rest and 0700/0600 permissions
-✓ project bootstrap for the signed-in user
-✓ admin-created account and separate personal project
-✓ a second login revokes the first device session
-✓ per-user run slot returns USER_BUSY while a run is active
-✓ sandboxed compile and run
-✓ cross-user run/restore access returns 404 and WS close 4403
-✓ disabling an account closes its live WebSocket with 4401
-✓ compile diagnostics
-✓ wall-clock timeout and process-group cleanup
-✓ output cap
-✓ cgroup memory limit
-✓ fake /etc/passwd inside jail
-✓ host include path unavailable
-✓ network namespace has no route
-✓ compiler flag allowlist
-✓ multi-file project
-✓ clang-format sandboxed formatting
-✓ DAP breakpoint, stack, variables and cross-user rejection
-✓ SQLite history and snapshot restore
-✓ forced password change blocks the workspace until completed
-✓ password change revokes the old session and issues a new one
-✓ logout clears the cookie and invalidates the session
-✓ login flood is rate-limited
-27 checks passed.
-```
+through environment variables, and logs in for real (no auth bypass). It covers authentication
+and cross-account authorization, sandboxed compile/run limits, formatting, DAP debugging,
+history/restore, password changes, logout, and rate limiting. The exact check count can change
+with the test suite.
 
 Localization has two dedicated checks:
 
@@ -359,14 +345,14 @@ and [`tests/debug/README.md`](tests/debug/README.md).
 - When LLVM maps a breakpoint line to the next line, the breakpoint list keeps the line number
   the user set while its "verified" state is updated; the current execution line follows the
   stack frame returned by the debugger.
-- `socket()` itself does not fail; acceptance is based on connection failure.
 - For run/debug failures, check the bottom "Run Output" and "Debug Console" first; compile
   errors go to the "Problems" panel.
 
 ## References
 
 - UI style: LeetCode-style workbench
-- Boundaries and constraints of Monaco, nsjail, DAP, and lldb-dap: see [`AGENTS.md`](AGENTS.md)
+- Account isolation: [`docs/multi-user-auth.md`](docs/multi-user-auth.md)
+- Project history and superseded implementation notes: [`docs/HISTORY.md`](docs/HISTORY.md)
 
 ## License
 

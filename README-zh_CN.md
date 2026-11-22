@@ -40,7 +40,8 @@ npm start                   # 单进程启动，默认 http://127.0.0.1:3000
 ```
 
 不开放匿名注册：首个账号由 CLI 创建，之后可用 `npm run user:add` 或 `POST /api/admin/users`。
-如果旧数据库里已有 `playground` 项目，**第一个**账号会自动继承它。
+**第一个**账号会继承所有尚无归属的项目（包括旧 `playground`）；如果已有账号时仍有无主项目，
+业务 API 会 fail closed 并返回 `503 ORPHAN_PROJECTS`。
 
 开发模式（Vite 热更新 + tsx 后端）：
 
@@ -50,7 +51,7 @@ npm run dev                 # 前端 http://127.0.0.1:5173，API/WS 代理到 30
 
 > `sandbox:setup` 会把 `nsjail` 安装为 `4755`（setuid root），并创建 4 个设备节点到
 > `data/sandbox/dev/`。这是单机/内网场景的简化；如果宿主机上还有其他不受信任的本地用户，
-> 建议改为由 root 启动后端，并把 nsjail 恢复为普通权限。详见“安全说明与环境差异”。
+> 建议改为由 root 启动后端，并把 nsjail 恢复为普通权限。详见“沙箱实现说明”。
 
 ### 环境变量
 
@@ -61,6 +62,8 @@ npm run dev                 # 前端 http://127.0.0.1:5173，API/WS 代理到 30
 | `DB_PATH` | `data/cpplab.db` | SQLite 路径（含密码哈希与会话） |
 | `WORK_ROOT` | `$TMPDIR/cpplab-work` | 每次任务的临时工作区根目录；建议放在 tmpfs |
 | `NSJAIL_PATH` | 自动探测 | nsjail 可执行文件 |
+| `SANDBOX_UID` | `10000` | 沙箱进程使用的宿主 UID；必须与服务 UID 不同 |
+| `SANDBOX_GID` | `10000` | 沙箱进程与沙箱设备节点使用的宿主 GID |
 | `LLDB_DAP_PATH` | 自动探测 | lldb-dap 路径 |
 | `DUMB_INIT_PATH` | 自动探测 | dumb-init 路径（缺失时直接 exec） |
 | `CLANG_FORMAT_PATH` | 自动探测 | clang-format 路径 |
@@ -87,10 +90,10 @@ npm run user:disable -- bob          # 也可 user:enable / user:role
   （里面有密码哈希与源码快照）。
 - 局域网/公网使用必须放在 HTTPS 反向代理之后：设置 `TRUST_PROXY=1`、
   `PUBLIC_ORIGIN=https://your.site`，`COOKIE_SECURE` 保持 `auto`（或强制 `always`）。
-  代理必须转发 `Cookie` 与 `Origin` 头并升级 WebSocket，否则 API 会返回 `403 CSRF_ORIGIN`、
-  WebSocket 登录失败。
-- 非浏览器 API 客户端在所有 `POST` / `PATCH` / `DELETE` 请求上都必须带 `Content-Type:
-  application/json` 与和站点同源的 `Origin` 头，这是 CSRF 防护的一部分。
+  代理必须转发 `Cookie` 与 `Origin` 头并升级 WebSocket。状态变更 HTTP 请求缺少 `Origin` 会返回
+  `403 CSRF_ORIGIN`；WebSocket 也应保留 `Origin`，以便拒绝跨站浏览器连接。
+- 非浏览器 API 客户端的状态变更请求必须带与站点同源的 `Origin` 头；仅在端点需要 JSON 请求体时
+  才需发送 `Content-Type: application/json`。
 - `TRUST_PROXY` 是跳数而不是布尔值。一层 nginx/Caddy 就设 `1`，Express 才会读取
   `X-Forwarded-For` / `X-Forwarded-Proto`；设为 `true` 会接受伪造的客户端 IP，使按 IP 的
   登录限流失效。
@@ -110,7 +113,7 @@ Node.js 单进程（Express + ws + node:sqlite）
   ├─ 编译：nsjail → dumb-init → g++/clang++ → /workspace/prog
   ├─ 运行：nsjail → dumb-init → /usr/bin/time → /workspace/prog
   ├─ 调试：nsjail → dumb-init → lldb-dap（stdio ↔ DAP WebSocket）
-  └─ 限流：按 IP 1 req/s（突发 5）、按账号、登录 IP/用户名窗口 + 退避
+  └─ 限流：按 IP 1 req/s（突发 5），运行/格式化/调试启动按账号限流，登录按 IP/用户名窗口 + 退避
 ```
 
 ### 目录
@@ -148,7 +151,7 @@ scripts/user-cli.mts      本地账号管理 CLI
 | `POST` | `/api/auth/login` | 公开登录（8 KiB 请求体，IP + 用户名限流） |
 | `GET` | `/api/auth/me` | 当前用户（脱敏） |
 | `POST` | `/api/auth/logout` | 撤销当前会话 |
-| `POST` | `/api/auth/password` | 校验旧密码、撤销其他会话、轮换 Cookie |
+| `POST` | `/api/auth/password` | 校验旧密码、撤销当前会话并签发新 Cookie |
 | `GET/POST/PATCH` | `/api/admin/users[...]` | 管理员创建 / 列表 / 禁用启用 / 改角色 / 重置密码 |
 | `GET` | `/api/project` | 当前账号的项目、文件、能力 |
 | `PATCH` | `/api/project` | 更新入口 / 编译器 / 标准 / 优化 / 名称 |
@@ -156,6 +159,7 @@ scripts/user-cli.mts      本地账号管理 CLI
 | `DELETE` | `/api/files/*` | 删除文件（入口与最后一个文件不可删） |
 | `POST` | `/api/format` | 沙箱内 clang-format |
 | `POST` | `/api/run` | 202 + `runId` + `wsPath` |
+| `GET` | `/api/run/:id` | 活跃运行状态或已完成结果 |
 | `GET` | `/api/runs` | 运行历史摘要 |
 | `GET` | `/api/runs/:id` | 历史详情（含源码快照） |
 | `POST` | `/api/runs/:id/restore` | 恢复历史快照 |
@@ -170,7 +174,7 @@ scripts/user-cli.mts      本地账号管理 CLI
 
 ## 安全模型
 
-[`AGENTS.md`](AGENTS.md) §3「安全底线清单」的 7 条底线在本实现中的落点：
+沙箱实现提供以下边界：
 
 1. **编译也在沙箱内**：`compileWorkspace` 与运行走同一套 nsjail 启动器，使用编译专用 cgroup 配额。
 2. **编译参数白名单**：只允许 `-g/-Wall/-Wextra/-Werror/-pthread/-lm/-D/-I/` 指定 sanitizer；
@@ -178,11 +182,13 @@ scripts/user-cli.mts      本地账号管理 CLI
 3. **输出上限**：父进程计数 stdout+stderr，超过 `outputBytes`（默认 64 KiB）立即终止进程树并标记 `OLE`。
 4. **杀进程组**：`setsid` 启动 nsjail，watchdog 先 SIGTERM 整个进程组，再按 `/proc` 父子关系 SIGKILL，
    避免 pid namespace 里的 init 残留。
-5. **无网络**：nsjail 默认创建新 network namespace；没有接口、没有路由。
-6. **只读 rootfs + 独立工作区**：`/usr` 只读 bind，`/workspace` 是每次任务新建的目录，
-   jail 内 `/tmp`、`/dev/shm` 是 tmpfs；根文件系统目录权限为 0555。`WORK_ROOT` 建议放在
+5. **无外网**：每个 jail 都有独立 network namespace；编译/运行的 seccomp 策略还会拒绝网络 socket
+   系统调用。调试策略允许 lldb 所需的受限 socket 操作，但网络命名空间没有外部路由。
+6. **只读 rootfs + 独立工作区**：nsjail 不传 `--rw`，chroot 根文件系统只读；`/usr` 只读 bind，
+   `/workspace` 是每次任务新建的可写 bind。jail 内 `/tmp`、`/dev/shm` 是 tmpfs。`WORK_ROOT` 建议放在
    tmpfs 上，使容量上限由内核直接强制。
-7. **no-new-privs + 非 root**：nsjail 默认 `no_new_privs`，jail 内 uid/gid = 10000，capabilities 丢弃；`dumb-init` 作为 PID 1 转发信号。
+7. **no-new-privs + 非 root**：nsjail 默认 `no_new_privs` 并丢弃 capabilities。禁用 user namespace；
+   jail 进程默认使用宿主 UID/GID `10000`，且 UID 必须与服务 UID 不同。`dumb-init` 作为 PID 1 转发信号。
 
 多用户层：
 
@@ -192,7 +198,8 @@ scripts/user-cli.mts      本地账号管理 CLI
   HTTPS 下 `Secure`；空闲 8 小时 / 绝对 7 天。**每个账号同时只保留一个有效会话**：
   登录/改密在同一事务中撤销旧会话并插入新会话（唯一部分索引兜底），后登录的设备会挤掉前一个；
   管理员禁用/重置撤销全部会话。
-- **CSRF**：所有非 GET `/api` 请求（含登录）必须带同源 `Origin`；WebSocket 升级同样校验。
+- **CSRF**：所有状态变更 `/api` 请求（含登录）必须带同源 `Origin`；浏览器 WebSocket 升级也校验
+  `Origin`。非浏览器客户端可省略该头，但仍须提供有效会话 Cookie。
 - **授权**：客户端从不传 projectId；所有查询使用当前账号自己的项目，运行/调试会话带
   `ownerId`；跨账号一律 `404`/`4403`。
 - **公平性**：在全局信号量之上加按账号运行/调试槽（`USER_BUSY` / `DEBUG_BUSY`）、
@@ -210,17 +217,17 @@ scripts/user-cli.mts      本地账号管理 CLI
 - 审计日志写入 `data/runtime/audit.log`（登录成功/失败、会话撤销、用户变更、运行/调试生命周期、
   源码哈希）；绝不记录密码、token 与完整请求体。
 
-### 安全说明与环境差异
+### 沙箱实现说明
 
-本项目按既定设计实现，以下是为适配特定内核版本与本地工具链所做的取舍，均已在代码注释中说明：
+当前配置细节：
 
-| 设计 | 实现 | 原因 |
+| 项目 | 当前行为 | 原因 |
 |---|---|---|
-| 调试 `pids_max=32` | `256` | LLVM 21 的 lldb-dap 线程池在 32 个任务时 `pthread_create` 失败 |
-| rootfs remount 为只读 | `--rw` + rootfs 目录 0555 / 文件 0444 | 当前内核在 setuid nsjail 的 user namespace 中 remount 宿主 bind 返回 EPERM；目录权限仍阻止写入 |
-| `/dev/*` 由 tmpfs 注入 | 宿主 `data/sandbox/dev` 设备节点 bind | 设备节点在 userns 中若是外部 uid，`open(O_CREAT)` 会 EACCES |
-| 调试 seccomp 只移除 `ptrace` | 同时允许 `setuid/setgid/setresuid/setresgid` | lldb 的 fork launcher 会调用 `setgid(getgid())`，否则被 SIGSYS |
-| `socket()` 应失败 | 允许创建 socket，但 `connect()` 无路由 | Linux 空网络命名空间允许创建 socket；无网络目标已由 netns 保证 |
+| 调试进程数 | `pids_max=256` | 允许 lldb-dap 线程池启动 |
+| 根文件系统 | chroot 只读；`/workspace` 和 tmpfs 挂载可写 | jail 进程使用与服务账号不同的宿主 UID |
+| `/dev` | tmpfs 中 bind 宿主 `data/sandbox/dev` 设备节点 | LLDB 启动器需要沙箱所属设备节点，包括 `/dev/null` |
+| 调试 seccomp | 允许 `ptrace`、部分身份切换和所需的本地 socket 操作 | LLDB fork launcher 会调用 `setgid(getgid())`，adapter 也需要本地 IPC |
+| 网络系统调用 | 编译/运行/格式化 seccomp 会拒绝；调试仅允许受限操作且无外部路由 | 冒烟测试只断言连接失败，不把失败归因于某一层边界 |
 
 其他限制：
 
@@ -229,11 +236,13 @@ scripts/user-cli.mts      本地账号管理 CLI
 - 局域网明文 HTTP 会暴露密码与会话 Cookie；请使用 HTTPS 反向代理，或 `127.0.0.1` + SSH 隧道。
   默认只监听 `127.0.0.1`。
 - setuid nsjail 意味着宿主机上的任意本地用户都能执行 nsjail；多用户宿主建议由 root 运行后端。
+- 沙箱进程使用配置的宿主 UID/GID（`SANDBOX_UID` / `SANDBOX_GID`），不是 user namespace 内的映射身份；
+  沙箱 UID 必须与服务 UID 不同。
 - 运行工作区位于宿主 `WORK_ROOT`。如果它不是 tmpfs，`fsize`、任务生命周期与清理仍会约束磁盘，
   但不像真正的 per-task tmpfs 那样由内核强制容量上限。
-- 调试 MVP **不支持交互式 stdin**。读取 `std::cin` 的程序调试时会等待输入，请先用“输入”面板
+- 调试**不支持交互式 stdin**。读取 `std::cin` 的程序调试时会等待输入，请先用“输入”面板
   验证逻辑，或改为固定输入再调试。
-- 未实现 clangd LSP、条件断点、`setVariable`、多线程 UI、`rr` 反向调试——这些属于后续/可选范围。
+- 当前不支持 clangd LSP、条件断点、`setVariable`、多线程 UI、`rr` 反向调试。
 - 沙箱的隔离上限仍是宿主内核 syscall 面；威胁模型接受这一点。
 
 ## 资源限制（默认）
@@ -256,44 +265,20 @@ npm run build
 node scripts/smoke-test.mjs
 ```
 
+可选的沙箱 / WebSocket 安全回归检查：
+
+```bash
+node scripts/security-test.mjs
+```
+
 ```bash
 npm run test:unit           # 密码/会话/授权/迁移单元测试（node --test + tsx）
 npm test                    # 端到端冒烟测试（需先 npm run build）
 ```
 
 脚本会启动隔离后端（临时 SQLite + 工作目录），通过环境变量引导管理员并**真实登录**（没有
-跳过鉴权的后门），执行 27 项检查：
-
-```text
-✓ backend and sandbox ready
-✓ unauthenticated access and Origin enforcement
-✓ login, uniform failure and HttpOnly session cookie
-✓ token/password hashes at rest and 0700/0600 permissions
-✓ project bootstrap for the signed-in user
-✓ admin-created account and separate personal project
-✓ a second login revokes the first device session
-✓ per-user run slot returns USER_BUSY while a run is active
-✓ sandboxed compile and run
-✓ cross-user run/restore access returns 404 and WS close 4403
-✓ disabling an account closes its live WebSocket with 4401
-✓ compile diagnostics
-✓ wall-clock timeout and process-group cleanup
-✓ output cap
-✓ cgroup memory limit
-✓ fake /etc/passwd inside jail
-✓ host include path unavailable
-✓ network namespace has no route
-✓ compiler flag allowlist
-✓ multi-file project
-✓ clang-format sandboxed formatting
-✓ DAP breakpoint, stack, variables and cross-user rejection
-✓ SQLite history and snapshot restore
-✓ forced password change blocks the workspace until completed
-✓ password change revokes the old session and issues a new one
-✓ logout clears the cookie and invalidates the session
-✓ login flood is rate-limited
-27 checks passed.
-```
+跳过鉴权的后门），覆盖认证与跨账号授权、沙箱编译运行及资源限制、格式化、DAP 调试、
+历史记录恢复、密码修改、登出与限流。检查数量会随测试套件变化。
 
 本地化有两项专属检查：
 
@@ -323,10 +308,10 @@ BASE_URL=http://127.0.0.1:3000 UI_USERNAME=alice UI_PASSWORD=... npm run i18n:ui
 - 调试会话中程序 `std::cin` 会等待（见上）。
 - 断点所在行被 LLVM 映射到下一行时，断点列表保留用户设置的行号，但“已验证”状态会更新；
   当前执行行以调试器返回的栈帧为准。
-- `socket()` 本身不会失败；验收以连接失败为准。
 - 运行/调试失败时优先看底部“运行输出”与“调试控制台”；编译错误看“问题”面板。
 
 ## 参考
 
 - 界面风格：力扣（LeetCode）风格
-- Monaco、nsjail、DAP、lldb-dap 的边界与约束见 [`AGENTS.md`](AGENTS.md)
+- 账号隔离：[`docs/multi-user-auth.md`](docs/multi-user-auth.md)
+- 已过期方案与开发记录：[`docs/HISTORY.md`](docs/HISTORY.md)

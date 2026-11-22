@@ -3,7 +3,7 @@ import { RateLimiter } from './rateLimiter.js';
 
 /**
  * Per-account concurrency slots. Global semaphores remain the hard ceiling;
- * these stop one account from occupying the whole queue (AGENTS.md §7).
+ * these stop one account from occupying the whole queue.
  */
 export class UserSlots {
   private readonly active = new Map<string, number>();

@@ -24,9 +24,9 @@ export function ensureRootfs(): void {
   fs.mkdirSync(root, { recursive: true, mode: 0o755 });
   makeWritable(root);
 
-  // F-06: drop any symlink planted at a managed location before a single
-  // write or chmod can traverse it. Top-level entries first: removing a
-  // symlinked parent makes the nested paths disappear with it.
+  // Drop any symlink planted at a managed location before a write or chmod can
+  // traverse it. Top-level entries first: removing a symlinked parent makes
+  // the nested paths disappear with it.
   const managedPaths = [
     'usr',
     'etc',
@@ -131,7 +131,7 @@ function writeIfDifferent(filePath: string, content: string): void {
   try {
     const stat = fs.lstatSync(filePath);
     if (stat.isSymbolicLink()) {
-      // F-06: never follow an attacker-planted link into host territory.
+      // Never follow an unexpected link into host territory.
       fs.unlinkSync(filePath);
     } else {
       if (stat.isFile() && fs.readFileSync(filePath, 'utf8') === content) return;
@@ -151,7 +151,7 @@ function writeIfDifferent(filePath: string, content: string): void {
   }
 }
 
-/** chmod that refuses to follow symbolic links (F-06). */
+/** chmod that refuses to follow symbolic links. */
 function chmodManaged(target: string, mode: number): void {
   const stat = fs.lstatSync(target);
   if (stat.isSymbolicLink()) {

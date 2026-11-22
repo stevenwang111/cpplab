@@ -78,8 +78,8 @@ export function assertSandboxReady(): void {
     throw new SandboxUnavailableError(msg('caps.nsjailStatFailed'), raw(String(error)));
   }
 
-  // F-01: the sandbox identity must be disjoint from the service user, else a
-  // file-system escape is immediately a service-user compromise.
+  // The sandbox identity must be disjoint from the service user, or a
+  // filesystem escape immediately becomes a service-user compromise.
   const serviceUid = process.getuid?.();
   if (serviceUid !== undefined && serviceUid === config.sandbox.uid) {
     throw new SandboxUnavailableError(
@@ -221,10 +221,10 @@ function buildArgs(configPath: string, workdir: string, logPath: string, argv: s
   // NOTE: options placed before --config are reset when the config file is
   // parsed, so every flag must come after --config.
   //
-  // No --rw: the chroot rootfs is mounted read-only (F-02).
+  // No --rw: keep the chroot rootfs read-only.
   // --disable_clone_newuser: with a setuid-root nsjail the user namespace would
-  // map the sandbox uid onto the service user on the host (F-01). Dropping the
-  // user namespace makes --user/--group the *real* host uid/gid, which is a
+  // map the sandbox uid onto the service user on the host. Dropping the user
+  // namespace makes --user/--group the *real* host uid/gid, which is a
   // dedicated non-service identity.
   return [
     '--config',
@@ -555,7 +555,7 @@ export function readRunStats(workdir: string): { memoryKb: number; cpuMs: number
     // The file is created inside an untrusted workspace and can be replaced by
     // anything the sandboxed program leaves behind. O_NOFOLLOW blocks crafted
     // symlinks, O_NONBLOCK keeps a FIFO from blocking the Node event loop
-    // forever (F-05), and the fstat check rejects directories, devices and
+    // forever, and the fstat check rejects directories, devices and
     // oversized files before a single byte is read.
     const fd = fs.openSync(
       statsPath,

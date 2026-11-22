@@ -151,9 +151,9 @@ function userVersion(database: DatabaseSync): number {
 }
 
 /**
- * M5 policy: one account may have exactly one active device/session. Older
- * databases may already hold several; keep the newest and revoke the rest
- * before the unique partial index is created.
+ * Each account may have exactly one active session. Older databases may
+ * already hold several; keep the newest and revoke the rest before creating
+ * the unique partial index.
  */
 function pruneDuplicateAuthSessions(database: DatabaseSync): number {
   const result = database
@@ -259,7 +259,7 @@ function createSchema(database: DatabaseSync): void {
     );
   `);
 
-  // Databases created before M5 have projects without owner_id.
+  // Existing single-user databases may have projects without owner_id.
   if (!hasColumn(database, 'projects', 'owner_id')) {
     database.exec('ALTER TABLE projects ADD COLUMN owner_id TEXT REFERENCES users(id)');
   }
@@ -267,7 +267,7 @@ function createSchema(database: DatabaseSync): void {
 
 /**
  * Restrict data/ and the SQLite files now that they hold password hashes and
- * session tokens (AGENTS.md §7 / multi-user-auth.md §11.3).
+ * session tokens.
  */
 function tightenDataPermissions(): void {
   const paths: Array<[string, number]> = [
@@ -383,7 +383,7 @@ export function createProjectForUser(userId: string, name = '__i18n__:db.project
 
 /**
  * Legacy installs have projects with `owner_id IS NULL`. The first account ever
- * created adopts them, so an existing single-user workspace is not lost. Any
+ * created adopts them, so existing project data is not lost. Any
  * remaining orphans after that are a fail-closed condition checked at startup.
  */
 export function claimOrphanProjects(userId: string): number {

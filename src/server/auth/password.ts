@@ -16,7 +16,7 @@ const SCRYPT_P = 1;
 const KEY_LENGTH = 32;
 const MAX_MEM = 64 * 1024 * 1024;
 
-/** scrypt is deliberately expensive; cap how many run at once (AGENTS.md §7). */
+/** scrypt is deliberately expensive; cap how many run at once. */
 const hashSlots = new Semaphore(config.limits.loginConcurrentHashes);
 
 /**

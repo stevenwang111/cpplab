@@ -63,8 +63,8 @@ export const config = {
     nsjailPath:
       firstExecutable([process.env.NSJAIL_PATH, '/usr/local/bin/nsjail', '/usr/bin/nsjail']) ??
       findOnPath(['nsjail']),
-    // Host uid/gid the jailed process really runs as (F-01). Must never be the
-    // service user: the sandbox is not allowed to own or mutate host files.
+    // Host uid/gid the jailed process really runs as. Must never be the service
+    // user: the sandbox is not allowed to own or mutate host files.
     uid: Number(process.env.SANDBOX_UID ?? 10000),
     gid: Number(process.env.SANDBOX_GID ?? 10000),
     rootfsDir: path.join(root, 'data', 'sandbox', 'rootfs'),

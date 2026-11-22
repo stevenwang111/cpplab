@@ -230,7 +230,7 @@ async function main(): Promise<void> {
   });
 
   // The login body is parsed with its own small limit, before the generic
-  // 3 MiB parser and before attachAuth (multi-user-auth.md §5).
+  // 3 MiB parser and before authentication.
   app.post(
     '/api/auth/login',
     express.json({ limit: '8kb' }),
@@ -634,7 +634,7 @@ async function main(): Promise<void> {
     }
 
     // WebSocket upgrades bypass Express entirely: resolve the cookie session
-    // here, then enforce ownership before attaching (multi-user-auth.md §8.3).
+    // here, then enforce ownership before attaching.
     const cookies = parseCookies(req.headers.cookie);
     const token = cookies[config.auth.cookieName];
     const authenticated = authenticateToken(token);

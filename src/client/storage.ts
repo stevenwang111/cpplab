@@ -1,7 +1,6 @@
 /**
  * Browser preferences are per account. A shared lab machine must not leak the
- * previous user's stdin, breakpoints or open file into the next account
- * (multi-user-auth.md §10.6).
+ * previous user's stdin, breakpoints or open file into the next account.
  */
 
 const PREFIX = 'cpplab';

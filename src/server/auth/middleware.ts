@@ -75,7 +75,7 @@ function normalizedOrigin(value: string): string | null {
 /**
  * Strict same-origin check for state-changing requests. `SameSite=Strict`
  * already stops most CSRF; requiring Origin closes the login-CSRF and
- * non-browser gaps (multi-user-auth.md §7.4).
+ * non-browser gaps.
  */
 export function requireSameOrigin(req: Request, _res: Response, next: NextFunction): void {
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {

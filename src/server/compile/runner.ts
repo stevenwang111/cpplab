@@ -244,9 +244,9 @@ export async function formatSource(
       '{BasedOnStyle: Google, IndentWidth: 4, TabWidth: 4, UseTab: Never, ColumnLimit: 100, ' +
       'AccessModifierOffset: -4, AllowShortFunctionsOnASingleLine: Empty, BreakBeforeBraces: Attach, ' +
       'PointerAlignment: Left, SortIncludes: true}';
-    // F-04: clang-format reads the source from stdin and writes the result to
-    // stdout. The host never reads back a file from the (sandbox-writable)
-    // workdir, so a swapped-in symlink cannot redirect the read at host files.
+    // clang-format reads the source from stdin and writes the result to stdout.
+    // The host never reads back a file from the sandbox-writable workdir, so a
+    // swapped-in symlink cannot redirect the read at host files.
     const result = await runInSandbox({
       purpose: 'format',
       workdir,

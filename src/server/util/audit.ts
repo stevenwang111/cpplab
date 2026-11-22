@@ -9,7 +9,7 @@ const MAX_LINE_CHARS = 8 * 1024;
 /**
  * Cap a single audit line. Failure floods are also rate-limited before they
  * reach this function, but a bounded line keeps one request from bloating the
- * log (multi-user-auth.md §12).
+ * log.
  */
 function boundedLine(entry: Record<string, unknown>): string {
   const line = JSON.stringify({ ts: new Date().toISOString(), ...entry });

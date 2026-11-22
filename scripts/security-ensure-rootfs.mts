@@ -1,5 +1,5 @@
 /**
- * F-06 regression probe: ensureRootfs() must refuse to follow symbolic links
+ * Regression probe: ensureRootfs() must refuse to follow symbolic links
  * planted at managed paths.
  *
  * Run with cwd pointed at a scratch dir that contains data/sandbox/rootfs, so
