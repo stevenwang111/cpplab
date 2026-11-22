@@ -23,7 +23,8 @@ user code (including the compile step) runs inside nsjail.
   (4 spaces, column limit 100).
 - **Graphical debugging**: lldb-dap + DAP over WebSocket; line breakpoints, current-line
   highlight, call stack, lazily-loaded variable tree, Watch, debug-console REPL, and
-  continue / pause / step over / step into / step out / restart / stop.
+  continue / pause / step over / step into / step out / restart / stop. The right-hand debug
+  panel is resizable and collapsible; both width and collapsed state are remembered.
 - **Run history**: every run stores a source snapshot, arguments, output, and status; any past
   run's code can be restored.
 - **Bilingual UI**: the client and the server share one message catalog (English / 中文), so API

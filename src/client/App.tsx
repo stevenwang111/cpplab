@@ -93,6 +93,7 @@ export default function App(): JSX.Element {
   const [runLimits, setRunLimits] = useState<RunLimits>(() => readJson('cpplab.runLimits', { timeMs: 2000, memoryMb: 256 }));
 
   const [debugState, setDebugState] = useState<DebugState>('idle');
+  const [debugCollapsed, setDebugCollapsed] = useState<boolean>(() => readString('cpplab.debugCollapsed') === '1');
   const [debugSession, setDebugSession] = useState<{ sessionId: string; program: string; cwd: string } | null>(null);
   const [debugThreadId, setDebugThreadId] = useState<number | null>(null);
   const [debugTab, setDebugTab] = useState<DebugTab>('stack');
@@ -199,6 +200,9 @@ export default function App(): JSX.Element {
   useEffect(() => {
     if (activeFile) saveLocal('cpplab.activeFile', activeFile);
   }, [activeFile]);
+  useEffect(() => {
+    saveLocal('cpplab.debugCollapsed', debugCollapsed ? '1' : '0');
+  }, [debugCollapsed]);
   useEffect(() => {
     activeFileRef.current = activeFile;
   }, [activeFile]);
@@ -809,6 +813,7 @@ export default function App(): JSX.Element {
     debugStateRef.current = 'starting';
     setBottomTab('debug');
     setBottomCollapsed(false);
+    setDebugCollapsed(false);
     setDiagnostics([]);
     setDebugTab('stack');
     appendDebug('system', t('app.debug.compilingTarget'));
@@ -1372,14 +1377,18 @@ export default function App(): JSX.Element {
           />
         </main>
 
-        <div
-          className={`resizer vertical ${debugResize.dragging ? 'dragging' : ''}`}
-          onPointerDown={debugResize.startDrag}
-          title={t('app.resizer.debugWidth')}
-        />
+        {!debugCollapsed && (
+          <div
+            className={`resizer vertical ${debugResize.dragging ? 'dragging' : ''}`}
+            onPointerDown={debugResize.startDrag}
+            title={t('app.resizer.debugWidth')}
+          />
+        )}
 
         <DebugPanel
           state={debugState}
+          collapsed={debugCollapsed}
+          onToggleCollapse={() => setDebugCollapsed((value) => !value)}
           breakpoints={breakpoints}
           frames={frames}
           selectedFrameId={selectedFrameId}

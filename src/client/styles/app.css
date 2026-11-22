@@ -1277,6 +1277,84 @@ body.is-resizing {
   overflow: hidden;
 }
 
+/* Collapsed: the panel becomes a slim rail with the state dot and expand affordance. */
+.debug-panel.collapsed {
+  width: 36px;
+  min-width: 36px;
+  margin-left: 10px;
+}
+
+.debug-rail {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 0 9px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.debug-rail:hover {
+  background: #fbfcfd;
+  color: var(--text);
+}
+
+.debug-rail-icon {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.debug-rail-dot {
+  position: absolute;
+  right: -3px;
+  bottom: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 1.5px solid #fff;
+  background: #c2c9d2;
+}
+
+.debug-rail-dot.running {
+  background: var(--green);
+}
+
+.debug-rail-dot.paused {
+  background: var(--amber);
+}
+
+.debug-rail-dot.starting {
+  background: var(--blue);
+}
+
+.debug-rail-dot.terminated {
+  background: #98a2b3;
+}
+
+.debug-rail-label {
+  writing-mode: vertical-rl;
+  letter-spacing: 3px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.debug-rail-chevron {
+  margin-top: auto;
+  opacity: 0.55;
+}
+
+.debug-rail:hover .debug-rail-chevron {
+  opacity: 1;
+}
+
 .debug-header {
   height: 44px;
   flex: none;
@@ -1363,7 +1441,7 @@ body.is-resizing {
   height: 34px;
   flex: none;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr)) 24px;
   border-bottom: 1px solid var(--border);
   background: #fbfcfd;
 }
@@ -1375,7 +1453,7 @@ body.is-resizing {
   color: var(--text-2);
   font-size: 10.5px;
   font-weight: 550;
-  padding: 0 2px;
+  padding: 0 1px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1400,6 +1478,20 @@ body.is-resizing {
   height: 2px;
   background: var(--accent);
   border-radius: 2px 2px 0 0;
+}
+
+.debug-tabs .debug-collapse {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-left: 1px solid var(--border);
+  color: var(--muted);
+  overflow: visible;
+}
+
+.debug-tabs .debug-collapse:hover {
+  background: #fff;
+  color: var(--text);
 }
 
 .debug-tab-count {

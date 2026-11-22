@@ -18,6 +18,8 @@ const zhCN = {
   'debug.action.stepOut': '单步步出 (Shift + F11)',
   'debug.action.restart': '重新启动调试',
   'debug.action.stop': '停止调试 (Shift + F5)',
+  'debug.action.collapse': '收起调试面板',
+  'debug.action.expand': '展开调试面板',
 
   'debug.tab.stack': '调用栈',
   'debug.tab.variables': '变量',
@@ -78,6 +80,8 @@ const en: Record<keyof typeof zhCN, string> = {
   'debug.action.stepOut': 'Step out (Shift + F11)',
   'debug.action.restart': 'Restart debugging',
   'debug.action.stop': 'Stop debugging (Shift + F5)',
+  'debug.action.collapse': 'Collapse debug panel',
+  'debug.action.expand': 'Expand debug panel',
 
   'debug.tab.stack': 'Call stack',
   'debug.tab.variables': 'Variables',

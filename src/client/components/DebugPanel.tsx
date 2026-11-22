@@ -2,6 +2,7 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   Bug,
+  ChevronLeft,
   ChevronRight,
   CircleDot,
   Loader2,
@@ -30,6 +31,8 @@ export interface WatchExpression {
 
 interface DebugPanelProps {
   state: DebugState;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
   breakpoints: EditorBreakpoint[];
   frames: DapStackFrame[];
   selectedFrameId: number | null;
@@ -74,6 +77,28 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
   const isActive = isPaused || isRunning || state === 'starting';
   const stackCount = props.frames.length;
   const breakpointCount = props.breakpoints.length;
+
+  if (props.collapsed) {
+    return (
+      <aside className="debug-panel collapsed">
+        <button
+          type="button"
+          className="debug-rail"
+          onClick={props.onToggleCollapse}
+          title={t('debug.action.expand')}
+          aria-label={t('debug.action.expand')}
+          aria-expanded={false}
+        >
+          <span className="debug-rail-icon">
+            <Bug size={15} />
+            <span className={`debug-rail-dot ${state}`} />
+          </span>
+          <span className="debug-rail-label">{t('debug.header.title')}</span>
+          <ChevronLeft size={14} className="debug-rail-chevron" />
+        </button>
+      </aside>
+    );
+  }
 
   return (
     <aside className="debug-panel">
@@ -170,6 +195,7 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
           type="button"
           className={props.activeTab === 'stack' ? 'active' : ''}
           onClick={() => props.onTabChange('stack')}
+          title={t('debug.tab.stack')}
         >
           {t('debug.tab.stack')} {stackCount > 0 && <span className="debug-tab-count">{stackCount}</span>}
         </button>
@@ -177,6 +203,7 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
           type="button"
           className={props.activeTab === 'variables' ? 'active' : ''}
           onClick={() => props.onTabChange('variables')}
+          title={t('debug.tab.variables')}
         >
           {t('debug.tab.variables')} {props.scopes.length > 0 && <span className="debug-tab-count">{props.scopes.length}</span>}
         </button>
@@ -184,6 +211,7 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
           type="button"
           className={props.activeTab === 'watch' ? 'active' : ''}
           onClick={() => props.onTabChange('watch')}
+          title={t('debug.tab.watch')}
         >
           {t('debug.tab.watch')} {props.watches.length > 0 && <span className="debug-tab-count">{props.watches.length}</span>}
         </button>
@@ -191,8 +219,19 @@ export function DebugPanel(props: DebugPanelProps): JSX.Element {
           type="button"
           className={props.activeTab === 'breakpoints' ? 'active' : ''}
           onClick={() => props.onTabChange('breakpoints')}
+          title={t('debug.tab.breakpoints')}
         >
           {t('debug.tab.breakpoints')} {breakpointCount > 0 && <span className="debug-tab-count">{breakpointCount}</span>}
+        </button>
+        <button
+          type="button"
+          className="debug-collapse"
+          onClick={props.onToggleCollapse}
+          title={t('debug.action.collapse')}
+          aria-label={t('debug.action.collapse')}
+          aria-expanded
+        >
+          <ChevronRight size={14} />
         </button>
       </div>
 
