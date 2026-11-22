@@ -56,7 +56,11 @@ async function request<T>(
     } catch {
       // Fall through to the generic message.
     }
-    if (response.status === 401 && !options?.skipAuthHandler) unauthorizedHandler?.();
+    // Only an expired/missing session resets the app; a wrong current password
+    // also returns 401 (INVALID_CREDENTIALS) but must stay in the dialog.
+    if (response.status === 401 && body?.error.code === 'AUTH_REQUIRED' && !options?.skipAuthHandler) {
+      unauthorizedHandler?.();
+    }
     throw new ApiClientError(
       response.status,
       body?.error.code ?? 'HTTP_ERROR',
