@@ -30,7 +30,7 @@ const zhCN = {
   'auth.user.signedInAs': '已登录：{name}',
   'auth.user.menu': '账号菜单',
 
-  'auth.notice.sessionExpired': '登录状态已失效，请重新登录。',
+  'auth.notice.sessionExpired': '登录状态已失效（可能已在其他设备登录），请重新登录。',
   'auth.notice.loggedOut': '已退出登录。',
   'auth.error.loginFailed': '登录失败',
   'auth.error.passwordFailed': '修改密码失败',
@@ -67,7 +67,7 @@ const en: Record<keyof typeof zhCN, string> = {
   'auth.user.signedInAs': 'Signed in as {name}',
   'auth.user.menu': 'Account menu',
 
-  'auth.notice.sessionExpired': 'Your session expired; please sign in again.',
+  'auth.notice.sessionExpired': 'Your session ended (possibly signed in on another device); please sign in again.',
   'auth.notice.loggedOut': 'You have been signed out.',
   'auth.error.loginFailed': 'Sign-in failed',
   'auth.error.passwordFailed': 'Failed to change the password',

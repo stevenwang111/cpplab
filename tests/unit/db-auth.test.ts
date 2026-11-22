@@ -141,7 +141,7 @@ test('run history is scoped to a project id', () => {
 
 test('session rows store only a token hash and can be revoked', () => {
   const alice = db.getUserByUsername('alice')!;
-  const session = db.createAuthSession({
+  const { session } = db.replaceAuthSession({
     userId: alice.id,
     tokenHash: 'sha256-of-some-random-token',
     expiresAt: Date.now() + 60_000,
@@ -154,6 +154,30 @@ test('session rows store only a token hash and can be revoked', () => {
   db.revokeAuthSession(session.id);
   const revoked = db.findAuthSessionByTokenHash('sha256-of-some-random-token');
   assert.ok(revoked?.session.revokedAt);
+});
+
+test('startup prunes duplicate active sessions and installs the unique index', () => {
+  const alice = db.getUserByUsername('alice')!;
+  const raw = new DatabaseSync(dbPath);
+  raw.exec('DROP INDEX auth_sessions_single_active');
+  const insert = raw.prepare(
+    `INSERT INTO auth_sessions (id, user_id, token_hash, created_at, last_seen_at, expires_at, revoked_at, ip, user_agent)
+     VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`,
+  );
+  insert.run('old-session', alice.id, 'hash-old', 1000, 1000, Date.now() + 60_000);
+  insert.run('new-session', alice.id, 'hash-new', 2000, 2000, Date.now() + 60_000);
+  raw.close();
+
+  db.initDb();
+
+  const check = new DatabaseSync(dbPath);
+  const active = check
+    .prepare('SELECT id, revoked_at FROM auth_sessions WHERE user_id = ? AND revoked_at IS NULL')
+    .all(alice.id) as Array<{ id: string; revoked_at: number | null }>;
+  assert.deepEqual(active.map((row) => row.id), ['new-session']);
+  const indexes = check.prepare("PRAGMA index_list('auth_sessions')").all() as Array<{ name: string }>;
+  assert.ok(indexes.some((index) => index.name === 'auth_sessions_single_active'));
+  check.close();
 });
 
 test('listUsers returns safe metadata and countAdmins tracks active admins', () => {

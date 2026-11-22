@@ -32,7 +32,8 @@ user code (including the compile step) runs inside nsjail.
   follows the browser; switch any time in Settings → Language (kept in `localStorage`).
 - **Multi-user accounts**: local accounts created by an administrator (no public registration),
   username/password login with scrypt, server-side sessions in an HttpOnly `SameSite=Strict`
-  cookie, forced password change, and per-account projects / history / debug sessions.
+  cookie, **one active device per account** (a new sign-in revokes the old session), forced
+  password change, and per-account projects / history / debug sessions.
 - **Isolation**: nsjail (namespaces + cgroup v2 + rlimits + seccomp), no network, read-only root
   filesystem, a fresh workspace per task, process-group reaping, output caps, global and
   per-account concurrency caps, and rate limiting.
@@ -213,7 +214,9 @@ Multi-user layer:
   usernames still pay for one scrypt run, keeping login timing uniform.
 - **Sessions**: 32 random bytes, stored only as SHA-256 in `auth_sessions`; HttpOnly,
   `SameSite=Strict`, `Path=/`, `Secure` on HTTPS, 8-hour idle / 7-day absolute timeouts.
-  Login always rotates the token; password changes and admin disables revoke every session.
+  Each account has exactly one active session: login/password change revoke the old session and
+  insert the new one in one transaction (a unique partial index enforces the invariant), so a
+  second device signs the first one out. Admin disables/resets revoke every session.
 - **CSRF**: every non-GET `/api` request must carry a same-origin `Origin` (including login).
   WebSocket upgrades validate `Origin` too.
 - **Authorization**: the client never sends a project id. Every query uses the signed-in user's
@@ -293,7 +296,7 @@ npm test                    # end-to-end smoke test (requires npm run build)
 ```
 
 The smoke test boots an isolated backend with a temporary SQLite database, bootstraps an admin
-through environment variables, and logs in for real (no auth bypass). It runs 26 checks:
+through environment variables, and logs in for real (no auth bypass). It runs 27 checks:
 
 ```text
 ✓ backend and sandbox ready
@@ -302,6 +305,7 @@ through environment variables, and logs in for real (no auth bypass). It runs 26
 ✓ token/password hashes at rest and 0700/0600 permissions
 ✓ project bootstrap for the signed-in user
 ✓ admin-created account and separate personal project
+✓ a second login revokes the first device session
 ✓ per-user run slot returns USER_BUSY while a run is active
 ✓ sandboxed compile and run
 ✓ cross-user run/restore access returns 404 and WS close 4403
@@ -322,7 +326,7 @@ through environment variables, and logs in for real (no auth bypass). It runs 26
 ✓ password change revokes the old session and issues a new one
 ✓ logout clears the cookie and invalidates the session
 ✓ login flood is rate-limited
-26 checks passed.
+27 checks passed.
 ```
 
 Localization has two dedicated checks:

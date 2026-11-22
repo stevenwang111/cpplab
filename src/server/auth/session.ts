@@ -3,8 +3,8 @@ import type { Request } from 'express';
 import type { AuthUser } from '../../shared/types.js';
 import { config } from '../config.js';
 import {
-  createAuthSession,
   findAuthSessionByTokenHash,
+  replaceAuthSession,
   getUserById,
   revokeAuthSession,
   toAuthUser,
@@ -74,16 +74,27 @@ export interface IssuedSession {
   session: AuthSessionRecord;
   token: string;
   maxAgeSeconds: number;
+  /** Previous sessions revoked by the single-device policy. */
+  revoked: number;
 }
 
-/** Always rotate: a successful login must never reuse an existing token. */
+/**
+ * Always rotate and replace: a successful login/session rotation revokes every
+ * other session of the account (one active device), and never reuses a token.
+ */
 export function issueSession(user: UserRecord, req: Request): IssuedSession {
   const token = randomBytes(TOKEN_BYTES).toString('base64url');
   const now = Date.now();
   const expiresAt = now + config.auth.sessionAbsoluteMs;
   const { ip, userAgent } = requestMeta(req);
-  const session = createAuthSession({ userId: user.id, tokenHash: hashToken(token), expiresAt, ip, userAgent });
-  return { session, token, maxAgeSeconds: Math.floor((expiresAt - now) / 1000) };
+  const { session, revoked } = replaceAuthSession({
+    userId: user.id,
+    tokenHash: hashToken(token),
+    expiresAt,
+    ip,
+    userAgent,
+  });
+  return { session, token, maxAgeSeconds: Math.floor((expiresAt - now) / 1000), revoked };
 }
 
 export interface Authenticated {

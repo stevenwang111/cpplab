@@ -104,6 +104,14 @@ export async function login(
 
   markUserLogin(user.id);
   const issued = issueSession(user, req);
+  if (issued.revoked > 0) {
+    audit({
+      event: 'auth.session.revoke',
+      userId: user.id,
+      reason: 'single_device_login',
+      count: issued.revoked,
+    });
+  }
   const fresh = getUserById(user.id) ?? user;
   audit({
     event: 'auth.login',
@@ -130,13 +138,14 @@ export async function changePassword(
     throw new ApiError(400, 'PASSWORD_UNCHANGED', msg('err.passwordUnchanged'));
   }
   const hash = await hashPassword(newPassword);
-  // Changing the password invalidates every existing session, including this one...
+  // Changing the password invalidates every existing session, including this
+  // one, and issues a fresh token inside the same transaction.
   updateUserPassword(current.id, hash, false);
-  const revoked = revokeUserAuthSessions(current.id);
-  audit({ event: 'auth.session.revoke', userId: current.id, reason: 'password_change', count: revoked });
-  // ...and the caller gets a brand-new token (multi-user-auth.md §7.3).
   const fresh = getUserById(current.id) ?? current;
   const issued = issueSession(fresh, req);
+  if (issued.revoked > 0) {
+    audit({ event: 'auth.session.revoke', userId: current.id, reason: 'password_change', count: issued.revoked });
+  }
   audit({ event: 'auth.password.change', userId: fresh.id, sessionId: issued.session.id });
   return { user: toAuthUser(fresh), issued };
 }

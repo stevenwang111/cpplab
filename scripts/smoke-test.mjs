@@ -112,7 +112,7 @@ class HttpClient {
 
 const anon = new HttpClient();
 const alice = new HttpClient();
-const bob = new HttpClient();
+let bob = new HttpClient();
 
 async function waitForServer() {
   const deadline = Date.now() + 30_000;
@@ -464,6 +464,24 @@ async function main() {
     assert.notEqual(bobProject.body.project.id, aliceProjectId);
     assert.equal(bobProject.body.files.length, 1);
     log('admin-created account and separate personal project');
+
+    // One account = one device: the second login wins and the first cookie dies.
+    const bobSecond = new HttpClient();
+    const bobSecondLogin = await bobSecond.login(BOB_USER, BOB_PASSWORD);
+    assert.equal(bobSecondLogin.status, 200, JSON.stringify(bobSecondLogin.body));
+    assert.equal((await bob.request('/api/project')).status, 401);
+    const sessionInspect = new DatabaseSync(dbPath);
+    const activeBobSessions = sessionInspect
+      .prepare(
+        `SELECT COUNT(*) AS n FROM auth_sessions s
+         JOIN users u ON u.id = s.user_id
+         WHERE u.username = ? AND s.revoked_at IS NULL`,
+      )
+      .get(BOB_USER);
+    sessionInspect.close();
+    assert.equal(activeBobSessions.n, 1);
+    bob = bobSecond;
+    log('a second login revokes the first device session');
 
     // One account cannot queue a second run behind its first one.
     await delay(1100);

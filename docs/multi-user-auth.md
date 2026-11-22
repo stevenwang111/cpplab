@@ -15,7 +15,7 @@
 |---|---|
 | 账号来源 | 本地账号；管理员通过 CLI 创建，默认**不开放注册** |
 | 密码存储 | Node 内置 `crypto.scrypt`（N=32768, r=8, p=1），不引入原生依赖 |
-| 会话 | 服务端会话表 + 32 字节随机 token，存 SHA-256；HttpOnly Cookie |
+| 会话 | 服务端会话表 + 32 字节随机 token，存 SHA-256；HttpOnly Cookie；**每账号同时仅 1 个有效会话** |
 | Cookie | `cpplab_session`，`HttpOnly; SameSite=Strict; Path=/`，HTTPS 下加 `Secure` |
 | CSRF | SameSite=Strict + 所有非 GET `/api` 校验 `Origin`；WebSocket 同样校验 |
 | 数据隔离 | 每个用户一个个人项目；`projects.owner_id` 为唯一归属依据 |
@@ -59,6 +59,7 @@
 - 用户名 + 密码登录、登出、当前用户查询、修改密码。
 - 管理员创建/禁用用户、重置密码；不开放匿名注册（默认）。
 - 每个用户只能看到并操作自己的项目、文件、运行历史、调试会话。
+- 一个账号同时只允许一个设备/浏览器会话；新登录撤销旧会话。
 - HTTP 与 WebSocket 两条路径都鉴权；跨用户访问返回 404。
 - 按用户限流/并发配额；登录暴力破解防护。
 - 现有单用户数据可迁移给首个管理员，不丢失历史。
@@ -150,12 +151,17 @@ CREATE TABLE auth_sessions (
 );
 CREATE INDEX auth_sessions_user ON auth_sessions(user_id);
 CREATE INDEX auth_sessions_expires ON auth_sessions(expires_at);
+-- 单设备策略：每个账号最多一个未撤销会话
+CREATE UNIQUE INDEX auth_sessions_single_active
+  ON auth_sessions(user_id) WHERE revoked_at IS NULL;
 ```
 
 - `username` 限制 `^[A-Za-z0-9][A-Za-z0-9_.-]{2,31}$`；`COLLATE NOCASE` 只对 ASCII 生效，
   因此不要允许中文/Unicode 用户名，避免大小写/归一化歧义。
 - `password_hash` 存自描述格式：`scrypt$32768$8$1$<salt-b64>$<hash-b64>`，便于以后调参/升级。
 - `auth_sessions.id` 用 UUID；`token_hash = SHA-256(token)`，DB 泄露也无法直接复用 token。
+- 每个账号只保留一个 `revoked_at IS NULL` 的会话；登录在 `BEGIN IMMEDIATE` 事务中先撤销
+  旧会话再插入新会话，并发登录时最后一次成功登录生效。
 
 ### 6.2 现有表
 
@@ -201,6 +207,8 @@ recordRun({ projectId, ... })
   4. 若仍有 `owner_id IS NULL` 的 project：**拒绝启动 API**（health 可用），
      输出明确指令，绝不把遗留数据暴露给第一个登录者。
 - 迁移后 `initDb` 检查并 `chmod`：`data/ 700`、DB/WAL/SHM `600`。
+- 启动时把同一账号遗留的多个未撤销会话裁剪为最新一条，再创建
+  `auth_sessions_single_active` 唯一部分索引；此后登录在同一事务中替换旧会话。
 
 ## 7. 密码与登录
 
@@ -244,8 +252,11 @@ POST /api/auth/login { username, password }
   - 绝对超时 7 天（`expires_at`）。
   - 二者可配置；对 IDE 来说 30 分钟过短，8 小时是安全/可用折中。
 - 每次认证请求最多每 60 秒更新一次 `last_seen_at`，避免写放大。
+- **单设备策略**：每个账号同时只保留 1 个有效 session。登录/改密在事务中撤销该用户全部
+  旧 session 并插入新 token；旧设备的下一次 HTTP 请求返回 401，已打开的 WebSocket 在
+  1 秒定时复核内关闭 4401；启动迁移会把历史遗留的多会话裁剪为最新一条。
 - 登出：撤销当前 session、清 Cookie。
-- 改密码：校验旧密码 → 更新 hash → **撤销该用户其他所有 session** → 给当前连接发新 token。
+- 改密码：校验旧密码 → 更新 hash → **撤销该用户全部 session（含当前）** → 给当前连接发新 token。
 - 管理员禁用/重置密码：撤销该用户全部 session。
 - 定时清理过期/已撤销超过 7 天的 session。
 - 重启后 DB 会话仍有效；内存中的 run/debug 会话本来就会丢失，客户端需处理 4404/断线。
@@ -436,7 +447,7 @@ npm run user:disable -- bob
 ### 13.1 单元测试（`node --test` 或 `tsx --test`）
 
 - scrypt hash/verify：正确密码、错误密码、篡改 hash、参数解析、rehash。
-- session：过期、撤销、空闲超时、token hash 不存明文。
+- session：过期、撤销、空闲超时、token hash 不存明文、同账号二次登录替换旧会话。
 - 登录限流：IP/用户名双维度、退避、429。
 - 授权纯函数：A 不能读 B 的 project/run/debug。
 - 迁移：旧 `playground` 赋给管理员；`owner_id IS NULL` 时 fail closed。
@@ -452,6 +463,7 @@ npm run user:disable -- bob
    - 错误密码 → 401 且文案不区分用户是否存在；
    - 连续失败 → 429；
    - 登录成功 → 200 + HttpOnly/SameSite cookie；
+   - 同账号第二次登录 → 200，首个 Cookie 失效，DB 中该账号仅 1 条未撤销会话；
    - bob 访问 alice 的 `/api/run/:id`、`/api/runs/:id`、`/api/runs/:id/restore`、
      `/api/debug/:id/stop` → 404；
    - bob 用 alice 的 runId 连 WS → 关闭 4403/4404；
@@ -459,7 +471,7 @@ npm run user:disable -- bob
    - 登出后再访问 → 401；
    - 改密后旧 session 失效；
    - 非 GET 缺少/跨站 `Origin` → 403。
-4. 原有 15 项沙箱/调试检查全部带登录 Cookie 跑通。
+4. 原有沙箱/调试检查全部带登录 Cookie 跑通。
 
 ### 13.3 手工验收
 
@@ -531,6 +543,8 @@ npm run user:disable -- bob
     丢失后客户端要正确提示，不要无限重连。
 20. **传输安全**：局域网明文 HTTP 会暴露密码和 Cookie；优先 HTTPS 反代或
     `127.0.0.1` + SSH 隧道；README 要明确写出这一限制。
+21. **同账号多设备并存**：必须用“撤销旧会话 + 新会话”的事务，并加唯一部分索引；
+    只在前端隐藏或用 IP/UA 判断都不算单设备。
 
 ## 16. 已确认的决策（2026-11-22）
 
@@ -539,6 +553,7 @@ npm run user:disable -- bob
 | 账号创建 | **管理员 CLI 创建**，不开放注册 | 不做注册/邀请码/审批；首个管理员用 CLI 或一次性 bootstrap 创建；管理 UI 可后置 |
 | 数据隔离 | **每用户独立项目**，UI 仍单项目 | `projects.owner_id` + `getProjectForUser()`；不做项目切换器；schema 保留多项目扩展空间 |
 | 部署 | **HTTPS 反向代理** | 默认 `COOKIE_SECURE=auto`，配置 `TRUST_PROXY=1`/`PUBLIC_ORIGIN`；README 给出 Caddy/nginx 的 Cookie/Origin/WS 转发说明 |
+| 会话并发 | **每账号单设备** | 登录/改密在事务内撤销旧会话并签发新 token；DB 加唯一部分索引；旧 HTTP 返回 401、旧 WS 关闭 4401 |
 
 由此确定的首期范围：
 
@@ -562,9 +577,9 @@ npm run user:disable -- bob
 
 | 模块 | 文件 | 说明 |
 |---|---|---|
-| 数据层/迁移 | `src/server/db.ts` | `PRAGMA user_version=1`；`users`、`auth_sessions`、`projects.owner_id`；所有项目/运行/调试函数显式接收 `projectId`；首个账号继承遗留项目；启动时收紧 `data/` 与 DB 权限 |
+| 数据层/迁移 | `src/server/db.ts` | `PRAGMA user_version=1`；`users`、`auth_sessions`、`projects.owner_id`；单账号唯一活跃会话索引与旧会话裁剪；所有项目/运行/调试函数显式接收 `projectId`；首个账号继承遗留项目；启动时收紧 `data/` 与 DB 权限 |
 | 密码 | `src/server/auth/password.ts` | scrypt N=32768/r=8/p=1、自描述格式、`timingSafeEqual`、dummy 校验、rehash、哈希并发槽、密码策略 |
-| 会话 | `src/server/auth/session.ts` | 32 字节 token、只存 SHA-256、HttpOnly/SameSite/Path/Secure、空闲/绝对超时、每 60 秒 touch、轮换与撤销；`authenticateTokenHash` 供 WS 复用 |
+| 会话 | `src/server/auth/session.ts` | 32 字节 token、只存 SHA-256、HttpOnly/SameSite/Path/Secure、空闲/绝对超时、每 60 秒 touch、单设备轮换与撤销；`authenticateTokenHash` 供 WS 复用 |
 | 登录防护 | `src/server/auth/loginLimiter.ts` | IP 10/min、用户名 5/min、连续失败 1m→5m→15m 退避，成功登录清空该账号窗口 |
 | 中间件 | `src/server/auth/middleware.ts` | `attachAuth` / `requireAuth` / `requireAdmin` / `requireSameOrigin` / `requirePasswordChanged`；WS Origin 校验 |
 | 认证服务 | `src/server/auth/service.ts` | login/logout/me/password、管理员创建/禁用/改角色/重置、一次性 bootstrap、统一错误与审计 |
@@ -594,12 +609,13 @@ npm run user:disable -- bob
 
 ### 18.3 验收证据
 
-- `npm run test:unit`：26 项，覆盖 scrypt 哈希/校验/参数升级、密码策略、登录限流与退避、
-  会话创建/撤销/过期/空闲超时、账号禁用、改密轮换、首次登录迁移、运行历史按 project 隔离、
-  每账号并发槽。
-- `npm test`（`scripts/smoke-test.mjs`）：26 项，真实 bootstrap 管理员并登录，覆盖未登录 401、
+- `npm run test:unit`：28 项，覆盖 scrypt 哈希/校验/参数升级、密码策略、登录限流与退避、
+  会话创建/撤销/过期/空闲超时、单账号二次登录替换旧会话、旧多会话裁剪与唯一索引、账号禁用、
+  改密轮换、首次登录迁移、运行历史按 project 隔离、每账号并发槽。
+- `npm test`（`scripts/smoke-test.mjs`）：27 项，真实 bootstrap 管理员并登录，覆盖未登录 401、
   缺失/跨站 Origin 403、HttpOnly/SameSite Cookie、DB 中只存 token/password 哈希、
-  `data/` 0700 与 DB 0600、双用户项目隔离、跨用户 run/restore/debug 404 与 WS 4403/4401、
+  `data/` 0700 与 DB 0600、同账号二次登录替换旧会话、双用户项目隔离、
+  跨用户 run/restore/debug 404 与 WS 4403/4401、
   每账号运行与调试并发 429、禁用账号会关闭已打开的 WS（4401）、强制改密、改密使旧会话失效、登出失效、登录洪水 429；
   原有沙箱（TLE/OLE/MLE/逃逸/无网络/参数白名单）与 DAP 检查全部带登录 Cookie 跑通。
 - `npm run i18n:check`：443 个 key，中英一致，无未翻译文案。

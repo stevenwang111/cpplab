@@ -150,6 +150,28 @@ function userVersion(database: DatabaseSync): number {
   return row?.user_version ?? 0;
 }
 
+/**
+ * M5 policy: one account may have exactly one active device/session. Older
+ * databases may already hold several; keep the newest and revoke the rest
+ * before the unique partial index is created.
+ */
+function pruneDuplicateAuthSessions(database: DatabaseSync): number {
+  const result = database
+    .prepare(
+      `UPDATE auth_sessions SET revoked_at = ?
+       WHERE revoked_at IS NULL AND id NOT IN (
+         SELECT id FROM (
+           SELECT id, ROW_NUMBER() OVER (
+             PARTITION BY user_id ORDER BY created_at DESC, id DESC
+           ) AS rn
+           FROM auth_sessions WHERE revoked_at IS NULL
+         ) WHERE rn = 1
+       )`,
+    )
+    .run(Date.now());
+  return Number(result.changes);
+}
+
 function createSchema(database: DatabaseSync): void {
   database.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -278,6 +300,13 @@ export function initDb(): void {
   }
   createSchema(db);
   migrateLegacySeed(db);
+  pruneDuplicateAuthSessions(db);
+  // Hard guarantee at the storage layer; the login transaction also revokes
+  // the previous session before inserting the new one.
+  db.exec(
+    `CREATE UNIQUE INDEX IF NOT EXISTS auth_sessions_single_active
+       ON auth_sessions(user_id) WHERE revoked_at IS NULL`,
+  );
   if (version < SCHEMA_VERSION) db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   tightenDataPermissions();
 }
@@ -730,18 +759,34 @@ export interface CreateAuthSessionInput {
   userAgent?: string | null;
 }
 
-export function createAuthSession(input: CreateAuthSessionInput): AuthSessionRecord {
+export interface ReplaceAuthSessionResult {
+  session: AuthSessionRecord;
+  /** Number of previous sessions revoked by this login. */
+  revoked: number;
+}
+
+/**
+ * Issue a new session and revoke every existing session for the account in the
+ * same write transaction. This is the single-device policy: concurrent logins
+ * serialize on `BEGIN IMMEDIATE`, so the last successful login wins.
+ */
+export function replaceAuthSession(input: CreateAuthSessionInput): ReplaceAuthSessionResult {
   const id = randomUUID();
   const now = Date.now();
-  requireDb()
-    .prepare(
-      `INSERT INTO auth_sessions (id, user_id, token_hash, created_at, last_seen_at, expires_at, revoked_at, ip, user_agent)
-       VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-    )
-    .run(id, input.userId, input.tokenHash, now, now, input.expiresAt, input.ip ?? null, input.userAgent ?? null);
-  const row = requireDb().prepare('SELECT * FROM auth_sessions WHERE id = ?').get(id) as AuthSessionRow | undefined;
-  if (!row) throw new Error('failed to create session');
-  return asAuthSession(row);
+  return transaction((database) => {
+    const revoked = database
+      .prepare('UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL')
+      .run(now, input.userId);
+    database
+      .prepare(
+        `INSERT INTO auth_sessions (id, user_id, token_hash, created_at, last_seen_at, expires_at, revoked_at, ip, user_agent)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+      )
+      .run(id, input.userId, input.tokenHash, now, now, input.expiresAt, input.ip ?? null, input.userAgent ?? null);
+    const row = database.prepare('SELECT * FROM auth_sessions WHERE id = ?').get(id) as AuthSessionRow | undefined;
+    if (!row) throw new Error('failed to create session');
+    return { session: asAuthSession(row), revoked: Number(revoked.changes) };
+  });
 }
 
 export function findAuthSessionByTokenHash(tokenHash: string): { session: AuthSessionRecord; user: UserRecord } | null {

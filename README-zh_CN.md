@@ -21,7 +21,8 @@
 - **双语界面**：前后端共用一份消息目录（英文 / 中文），API 错误、运行阶段与沙箱提示和界面同语言；
   首次访问跟随浏览器语言，随时可在「设置 → 界面语言」切换（存 `localStorage`）。
 - **多用户账号**：管理员通过 CLI 创建本地账号（不开放注册）；scrypt 密码、服务端会话、
-  HttpOnly `SameSite=Strict` Cookie、强制改密；项目、历史与调试会话按账号隔离。
+  HttpOnly `SameSite=Strict` Cookie、**每账号同时只允许一个设备登录**（新登录逐出旧会话）、
+  强制改密；项目、历史与调试会话按账号隔离。
 - **隔离**：nsjail（namespaces + cgroup v2 + rlimits + seccomp）、无网络、只读根文件系统、
   每任务独立工作区、进程组回收、输出上限、全局与按账号并发上限、限流。
 
@@ -188,7 +189,9 @@ scripts/user-cli.mts      本地账号管理 CLI
 - **密码**：Node 内置 `scrypt`（N=32768，r=8，p=1），每个密码独立盐、自描述哈希格式，
   参数升级后下次登录自动 rehash；未知用户名同样执行一次 scrypt，避免时序枚举。
 - **会话**：32 字节随机 token，只存 SHA-256；HttpOnly、`SameSite=Strict`、`Path=/`、
-  HTTPS 下 `Secure`；空闲 8 小时 / 绝对 7 天。登录必轮换，改密与管理员禁用撤销全部会话。
+  HTTPS 下 `Secure`；空闲 8 小时 / 绝对 7 天。**每个账号同时只保留一个有效会话**：
+  登录/改密在同一事务中撤销旧会话并插入新会话（唯一部分索引兜底），后登录的设备会挤掉前一个；
+  管理员禁用/重置撤销全部会话。
 - **CSRF**：所有非 GET `/api` 请求（含登录）必须带同源 `Origin`；WebSocket 升级同样校验。
 - **授权**：客户端从不传 projectId；所有查询使用当前账号自己的项目，运行/调试会话带
   `ownerId`；跨账号一律 `404`/`4403`。
@@ -259,7 +262,7 @@ npm test                    # 端到端冒烟测试（需先 npm run build）
 ```
 
 脚本会启动隔离后端（临时 SQLite + 工作目录），通过环境变量引导管理员并**真实登录**（没有
-跳过鉴权的后门），执行 26 项检查：
+跳过鉴权的后门），执行 27 项检查：
 
 ```text
 ✓ backend and sandbox ready
@@ -268,6 +271,7 @@ npm test                    # 端到端冒烟测试（需先 npm run build）
 ✓ token/password hashes at rest and 0700/0600 permissions
 ✓ project bootstrap for the signed-in user
 ✓ admin-created account and separate personal project
+✓ a second login revokes the first device session
 ✓ per-user run slot returns USER_BUSY while a run is active
 ✓ sandboxed compile and run
 ✓ cross-user run/restore access returns 404 and WS close 4403
@@ -288,7 +292,7 @@ npm test                    # 端到端冒烟测试（需先 npm run build）
 ✓ password change revokes the old session and issues a new one
 ✓ logout clears the cookie and invalidates the session
 ✓ login flood is rate-limited
-26 checks passed.
+27 checks passed.
 ```
 
 本地化有两项专属检查：

@@ -58,6 +58,25 @@ test('login issues a session and wrong passwords fail uniformly', async () => {
   );
 });
 
+test('a second login replaces the previous session (one device per account)', async () => {
+  const first = await service.login('root', 'initial-password', fakeRequest());
+  const second = await service.login('root', 'initial-password', fakeRequest());
+  assert.equal(second.issued.revoked, 1);
+  assert.equal(session.authenticateToken(first.issued.token), null);
+  assert.ok(session.authenticateToken(second.issued.token));
+
+  const raw = new DatabaseSync(process.env.DB_PATH!);
+  const row = raw
+    .prepare(
+      `SELECT COUNT(*) AS n FROM auth_sessions s
+       JOIN users u ON u.id = s.user_id
+       WHERE u.username = 'root' AND s.revoked_at IS NULL`,
+    )
+    .get() as { n: number };
+  raw.close();
+  assert.equal(row.n, 1);
+});
+
 test('disabling a user kills their existing sessions', async () => {
   const root = db.getUserByUsername('root')!;
   const issued = await service.login('root', 'initial-password', fakeRequest());
@@ -119,14 +138,14 @@ test('the last admin cannot be disabled or demoted through the service', () => {
 
 test('expired and idle sessions are rejected even if the row exists', () => {
   const root = db.getUserByUsername('root')!;
-  const expired = db.createAuthSession({
+  const { session: expired } = db.replaceAuthSession({
     userId: root.id,
     tokenHash: 'expired-token-hash',
     expiresAt: Date.now() - 1,
   });
   assert.equal(session.authenticateTokenHash(expired.tokenHash), null);
 
-  const idle = db.createAuthSession({
+  const { session: idle } = db.replaceAuthSession({
     userId: root.id,
     tokenHash: 'idle-token-hash',
     expiresAt: Date.now() + 60 * 60 * 1000,
