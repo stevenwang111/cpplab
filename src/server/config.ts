@@ -33,6 +33,25 @@ function findOnPath(names: string[]): string | undefined {
   return undefined;
 }
 
+function envNumber(name: string, fallback: number, min: number, max: number): number {
+  const parsed = Number(process.env[name]);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function envFlag(name: string): boolean {
+  const value = (process.env[name] ?? '').trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
+}
+
+/** `auto` marks the cookie Secure only when the request itself is HTTPS. */
+function cookieSecureMode(): 'auto' | 'always' | 'never' {
+  const value = (process.env.COOKIE_SECURE ?? 'auto').trim().toLowerCase();
+  if (value === '1' || value === 'true' || value === 'always') return 'always';
+  if (value === '0' || value === 'false' || value === 'never') return 'never';
+  return 'auto';
+}
+
 export const config = {
   host: process.env.HOST ?? '127.0.0.1',
   port: Number(process.env.PORT ?? 3000),
@@ -88,6 +107,28 @@ export const config = {
     maxConcurrentRuns: 4,
     rateLimitPerSecond: 1,
     rateLimitBurst: 5,
+    /** Per-account concurrency. The global caps above remain the hard limit. */
+    userRuns: 1,
+    userDebugSessions: 1,
+    userRateLimitPerSecond: 1,
+    userRateLimitBurst: 5,
+    loginIpPerMinute: 10,
+    loginUserPerMinute: 5,
+    loginConcurrentHashes: 4,
+  },
+  auth: {
+    cookieName: 'cpplab_session',
+    sessionIdleMs: envNumber('SESSION_IDLE_HOURS', 8, 1, 24 * 30) * 60 * 60 * 1000,
+    sessionAbsoluteMs: envNumber('SESSION_ABSOLUTE_DAYS', 7, 1, 365) * 24 * 60 * 60 * 1000,
+    cookieSecure: cookieSecureMode(),
+    /** Number of trusted reverse-proxy hops. Never set this to `true`. */
+    trustProxy: envNumber('TRUST_PROXY', 0, 0, 16),
+    publicOrigin: process.env.PUBLIC_ORIGIN?.replace(/\/+$/, '') || undefined,
+    bootstrap: {
+      allow: envFlag('ALLOW_BOOTSTRAP'),
+      username: process.env.BOOTSTRAP_ADMIN_USERNAME,
+      password: process.env.BOOTSTRAP_ADMIN_PASSWORD,
+    },
   },
   debug: {
     memoryMb: 1024,

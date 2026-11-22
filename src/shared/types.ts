@@ -30,6 +30,30 @@ export interface FileEntry {
   content: string;
 }
 
+export type UserRole = 'admin' | 'user';
+export type UserStatus = 'active' | 'disabled';
+
+/** Safe user shape returned by the API. Never includes the password hash. */
+export interface AuthUser {
+  id: string;
+  username: string;
+  displayName: string;
+  role: UserRole;
+  mustChangePassword: boolean;
+}
+
+/** Admin-only listing adds account metadata, still without credentials. */
+export interface AdminUser extends AuthUser {
+  status: UserStatus;
+  createdAt: number;
+  updatedAt: number;
+  lastLoginAt: number | null;
+}
+
+export interface AuthState {
+  user: AuthUser;
+}
+
 export interface ProjectSettings {
   entry: string;
   compiler: CompilerId;

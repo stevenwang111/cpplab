@@ -16,13 +16,16 @@ import {
   STDS,
   type CompilerId,
   type OptId,
+  type Project,
   type StdId,
 } from '../shared/types.js';
 import {
+  cleanupAuthSessions,
+  countOrphanProjects,
+  countUsers,
   deleteFile,
   getFiles,
-  getFilesMap,
-  getProject,
+  getProjectForUser,
   getRun,
   initDb,
   listRuns,
@@ -41,22 +44,58 @@ import {
   stopDebugSession,
 } from './debug/session.js';
 import { audit } from './util/audit.js';
+import { userRequestLimiter } from './util/userQuota.js';
+import { loginLimiter } from './auth/loginLimiter.js';
+import {
+  bootstrapAdminIfConfigured,
+  changePassword,
+  createUserByAdmin,
+  listAdminUsers,
+  login,
+  logout,
+  resetUserPassword,
+  updateUserRole,
+  updateUserStatus,
+} from './auth/service.js';
+import {
+  attachAuth,
+  requireAdmin,
+  requireAuth,
+  requirePasswordChanged,
+  requireSameOrigin,
+  wsOriginAllowed,
+} from './auth/middleware.js';
+import {
+  authenticateToken,
+  authenticateTokenHash,
+  clearSessionCookie,
+  cookieSecure,
+  hashToken,
+  parseCookies,
+  sessionCookieFor,
+} from './auth/session.js';
 
 const limiter = new RateLimiter(config.limits.rateLimitPerSecond, config.limits.rateLimitBurst);
-const rateSweeper = setInterval(() => limiter.sweep(), 60_000);
+const rateSweeper = setInterval(() => {
+  limiter.sweep();
+  userRequestLimiter.sweep();
+  loginLimiter.sweep();
+}, 60_000);
 rateSweeper.unref();
 
-/** Project payload rendered in the caller's language, including seeded text. */
-function projectState(locale: Locale) {
-  const project = getProject();
-  return {
-    project: { ...project, name: resolveI18nText(project.name, locale) },
-    files: getFiles().map((file) => ({ ...file, content: resolveI18nText(file.content, locale) })),
-    capabilities: localizeCapabilities(capabilities!, locale),
-  };
-}
+/** Sessions are cheap to keep for a week but must not accumulate forever. */
+const sessionCleaner = setInterval(() => {
+  try {
+    cleanupAuthSessions();
+  } catch {
+    // Cleanup is best effort.
+  }
+}, 60 * 60 * 1000);
+sessionCleaner.unref();
 
 let capabilities: Awaited<ReturnType<typeof detectCapabilities>> | undefined;
+/** Set when legacy projects still have no owner; the API then fails closed. */
+let orphanProjectsBlocked = false;
 
 function asyncRoute(
   handler: (req: Request, res: Response) => Promise<void>,
@@ -70,84 +109,225 @@ function clientKey(req: Request): string {
   return req.ip ?? req.socket.remoteAddress ?? 'unknown';
 }
 
-/** F-07: session listings are only shown to loopback clients. */
-function isLoopback(req: Request): boolean {
-  const ip = req.socket.remoteAddress ?? '';
-  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || ip.startsWith('127.');
-}
-
-/**
- * F-07: reject cross-origin WebSocket upgrades. Browsers always send an Origin
- * header on WS upgrades; a remote page must not attach to local sessions.
- * Same-host origins (any port, e.g. the vite dev proxy) are accepted.
- */
-function originAllowed(origin: string | undefined, host: string | undefined): boolean {
-  if (!origin) return true; // Non-browser clients (tests, CLI) send no Origin.
-  let parsed: URL;
-  try {
-    parsed = new URL(origin);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-  const hostname = parsed.hostname;
-  const loopback = hostname === '127.0.0.1' || hostname === '::1' || hostname === 'localhost';
-  return loopback || parsed.host === host;
-}
-
 function enforceRate(req: Request): void {
   if (!limiter.take(clientKey(req))) {
     throw new ApiError(429, 'RATE_LIMITED', msg('err.rateLimited'));
   }
 }
 
+function enforceUserRate(req: Request): void {
+  if (!req.user) return;
+  if (!userRequestLimiter.take(`user:${req.user.id}`)) {
+    throw new ApiError(429, 'RATE_LIMITED', msg('err.rateLimited'));
+  }
+}
+
+/** The caller's own project; the client never supplies a project id. */
+function projectFor(req: Request): Project {
+  const project = req.user ? getProjectForUser(req.user.id) : null;
+  if (!project) throw new ApiError(500, 'PROJECT_MISSING', msg('err.projectMissing'));
+  return project;
+}
+
+/** Project payload rendered in the caller's language, including seeded text. */
+function projectState(project: Project, locale: Locale) {
+  return {
+    project: { ...project, name: resolveI18nText(project.name, locale) },
+    files: getFiles(project.id).map((file) => ({ ...file, content: resolveI18nText(file.content, locale) })),
+    capabilities: localizeCapabilities(capabilities!, locale),
+  };
+}
+
+function requireProjectForUser(req: Request, res: Response, next: NextFunction): void {
+  if (!orphanProjectsBlocked) {
+    next();
+    return;
+  }
+  if ((req.originalUrl.split('?')[0] ?? '').startsWith('/api/auth/')) {
+    next();
+    return;
+  }
+  next(new ApiError(503, 'ORPHAN_PROJECTS', msg('err.orphanProjects')));
+}
+
+/**
+ * WebSocket sessions can outlive the cookie session (admin disable, password
+ * reset). Re-validate at most every five seconds so message floods cannot turn
+ * the check itself into database load.
+ */
+function authProbe(tokenHash: string | undefined): () => boolean {
+  let checkedAt = 0;
+  let authorized = true;
+  return () => {
+    if (!tokenHash) return false;
+    const now = Date.now();
+    if (now - checkedAt < 5000) return authorized;
+    checkedAt = now;
+    authorized = authenticateTokenHash(tokenHash) !== null;
+    return authorized;
+  };
+}
+
+function healthPayload(locale: Locale) {
+  return {
+    ok: true,
+    serverTime: Date.now(),
+    capabilities: localizeCapabilities(capabilities!, locale),
+  };
+}
+
 async function main(): Promise<void> {
-  fs.mkdirSync(config.dataDir, { recursive: true });
-  fs.mkdirSync(path.join(config.dataDir, 'runtime'), { recursive: true });
+  fs.mkdirSync(config.dataDir, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(path.join(config.dataDir, 'runtime'), { recursive: true, mode: 0o700 });
   ensureRootfs();
   initDb();
+  await bootstrapAdminIfConfigured();
+  if (countUsers() === 0) {
+    console.warn(
+      '[cpplab] no user accounts exist; create the first admin with `npm run user:add -- <name> --admin`',
+    );
+  }
+  if (countUsers() > 0 && countOrphanProjects() > 0) {
+    orphanProjectsBlocked = true;
+    console.error(
+      `[cpplab] ${countOrphanProjects()} project(s) have owner_id IS NULL; refusing business API access. ` +
+        'Reassign them to an account before serving users.',
+    );
+  }
+  try {
+    cleanupAuthSessions();
+  } catch {
+    // Best effort.
+  }
   capabilities = await detectCapabilities();
   audit({
     event: 'startup',
     sandbox: localizeCapabilities(capabilities, DEFAULT_LOCALE).sandbox,
     tools: capabilities.tools,
+    authUsers: countUsers(),
+    orphanProjects: countOrphanProjects(),
   });
 
   const app = express();
-  app.set('trust proxy', false);
+  app.set('trust proxy', config.auth.trustProxy);
   app.disable('x-powered-by');
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=15552000');
     if (req.path.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
     next();
   });
   app.use(localeMiddleware);
-  app.use(express.json({ limit: config.maxBodyBytes }));
+
+  // CSRF: every state-changing API request must carry a same-origin Origin,
+  // including login (login CSRF) and before any body is parsed.
+  app.use('/api', requireSameOrigin);
 
   app.get('/api/health', (req, res) => {
-    res.json({
-      ok: true,
-      serverTime: Date.now(),
-      capabilities: localizeCapabilities(capabilities!, req.locale),
-      debugSessions: isLoopback(req) ? listDebugSessions() : [],
-    });
+    res.json(healthPayload(req.locale));
   });
 
+  // The login body is parsed with its own small limit, before the generic
+  // 3 MiB parser and before attachAuth (multi-user-auth.md §5).
+  app.post(
+    '/api/auth/login',
+    express.json({ limit: '8kb' }),
+    asyncRoute(async (req, res) => {
+      const body = req.body as { username?: unknown; password?: unknown } | undefined;
+      const username = typeof body?.username === 'string' ? body.username : '';
+      const ip = clientKey(req);
+      const gate = loginLimiter.check(ip, username);
+      if (!gate.allowed) {
+        res.setHeader('Retry-After', String(gate.retryAfterSeconds));
+        throw new ApiError(429, 'RATE_LIMITED', msg('err.loginRateLimited'));
+      }
+      try {
+        const result = await login(body?.username, body?.password, req);
+        loginLimiter.recordSuccess(result.user.username);
+        res.setHeader('Set-Cookie', sessionCookieFor(req, result.issued));
+        res.json({ user: result.user });
+      } catch (error) {
+        loginLimiter.recordFailure(username);
+        throw error;
+      }
+    }),
+  );
+
+  // Authentication is resolved from the cookie only; body parsing happens later.
+  app.use('/api', attachAuth, requireAuth, requireProjectForUser, requirePasswordChanged);
+  app.use(express.json({ limit: config.maxBodyBytes }));
+
+  app.get('/api/auth/me', (req, res) => {
+    res.json({ user: req.user });
+  });
+
+  app.post('/api/auth/logout', (req, res) => {
+    if (req.user && req.authSessionId) logout(req.authSessionId, req.user);
+    res.setHeader('Set-Cookie', clearSessionCookie(cookieSecure(req)));
+    res.json({ ok: true });
+  });
+
+  app.post(
+    '/api/auth/password',
+    asyncRoute(async (req, res) => {
+      const body = req.body as { currentPassword?: unknown; newPassword?: unknown } | undefined;
+      const result = await changePassword(req.authUserRecord!, body?.currentPassword, body?.newPassword, req);
+      res.setHeader('Set-Cookie', sessionCookieFor(req, result.issued));
+      res.json({ user: result.user });
+    }),
+  );
+
+  // --- admin (CLI is the primary path; the API exists for later UI work) ---
+  app.get('/api/admin/users', requireAdmin, (_req, res) => {
+    res.json({ users: listAdminUsers() });
+  });
+
+  app.post(
+    '/api/admin/users',
+    requireAdmin,
+    asyncRoute(async (req, res) => {
+      const body = (req.body ?? {}) as { username?: unknown; displayName?: unknown; role?: unknown; password?: unknown };
+      const created = await createUserByAdmin(body, req.authUserRecord!);
+      res.status(201).json(created);
+    }),
+  );
+
+  app.patch('/api/admin/users/:id', requireAdmin, (req, res, next) => {
+    try {
+      const body = (req.body ?? {}) as { status?: unknown; role?: unknown };
+      let user = req.user!;
+      if (body.status !== undefined) user = updateUserStatus(req.authUserRecord!, String(req.params.id), body.status);
+      if (body.role !== undefined) user = updateUserRole(req.authUserRecord!, String(req.params.id), body.role);
+      res.json({ user });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post(
+    '/api/admin/users/:id/reset-password',
+    requireAdmin,
+    asyncRoute(async (req, res) => {
+      const result = await resetUserPassword(req.authUserRecord!, String(req.params.id));
+      res.json(result);
+    }),
+  );
+
   app.get('/api/project', (req, res) => {
-    res.json(projectState(req.locale));
+    res.json(projectState(projectFor(req), req.locale));
   });
 
   app.patch('/api/project', (req, res, next) => {
     try {
+      const project = projectFor(req);
       const body = req.body as { settings?: Record<string, unknown>; name?: unknown };
-      const current = getProject();
-      const settings = { ...current.settings };
+      const settings = { ...project.settings };
       if (body.settings) {
         if (body.settings.entry !== undefined) {
           const entry = normalizeFilePath(body.settings.entry);
-          if (!getFiles().some((file) => file.path === entry)) {
+          if (!getFiles(project.id).some((file) => file.path === entry)) {
             throw new ApiError(400, 'ENTRY_MISSING', msg('err.entryMissing', { entry }));
           }
           settings.entry = entry;
@@ -178,8 +358,8 @@ async function main(): Promise<void> {
         }
         name = body.name.trim();
       }
-      const project = updateProjectSettings(settings, name);
-      res.json({ project: { ...project, name: resolveI18nText(project.name, req.locale) } });
+      const updated = updateProjectSettings(project.id, settings, name);
+      res.json({ project: { ...updated, name: resolveI18nText(updated.name, req.locale) } });
     } catch (error) {
       next(error);
     }
@@ -187,6 +367,7 @@ async function main(): Promise<void> {
 
   app.post('/api/files', (req, res, next) => {
     try {
+      const project = projectFor(req);
       const body = req.body as { path?: unknown; content?: unknown };
       const filePath = normalizeFilePath(body.path);
       if (typeof body.content !== 'string') {
@@ -195,11 +376,11 @@ async function main(): Promise<void> {
       if (Buffer.byteLength(body.content) > config.limits.maxSourceBytes) {
         throw new ApiError(413, 'SOURCE_TOO_LARGE', msg('err.fileTooLarge'));
       }
-      const existing = getFiles();
+      const existing = getFiles(project.id);
       if (!existing.some((file) => file.path === filePath) && existing.length >= config.limits.maxFiles) {
         throw new ApiError(400, 'TOO_MANY_FILES', msg('err.tooManyFiles', { max: config.limits.maxFiles }));
       }
-      upsertFile(filePath, body.content);
+      upsertFile(project.id, filePath, body.content);
       res.json({ ok: true, path: filePath });
     } catch (error) {
       next(error);
@@ -208,18 +389,19 @@ async function main(): Promise<void> {
 
   app.delete('/api/files/*', (req, res, next) => {
     try {
+      const project = projectFor(req);
       const filePath = normalizeFilePath(String((req.params as Record<string, string | string[]>)[0]));
-      const files = getFiles();
+      const files = getFiles(project.id);
       if (!files.some((file) => file.path === filePath)) {
         throw new ApiError(404, 'FILE_NOT_FOUND', msg('err.fileMissing'));
       }
       if (files.length <= 1) {
         throw new ApiError(400, 'LAST_FILE', msg('err.lastFile'));
       }
-      if (getProject().settings.entry === filePath) {
+      if (project.settings.entry === filePath) {
         throw new ApiError(400, 'ENTRY_FILE', msg('err.entryFile'));
       }
-      deleteFile(filePath);
+      deleteFile(project.id, filePath);
       res.json({ ok: true });
     } catch (error) {
       next(error);
@@ -228,6 +410,7 @@ async function main(): Promise<void> {
 
   app.post('/api/format', asyncRoute(async (req, res) => {
     enforceRate(req);
+    enforceUserRate(req);
     const { file, content } = validateFormatRequest(req.body);
     const result = await formatSource(file, content, req.locale);
     res.json(result);
@@ -236,11 +419,15 @@ async function main(): Promise<void> {
   app.post('/api/run', (req, res, next) => {
     try {
       enforceRate(req);
+      enforceUserRate(req);
+      const project = projectFor(req);
       const validated = validateRunRequest(req.body);
       if (!capabilities?.compilers.some((item) => item.id === validated.compiler && item.available)) {
         throw new ApiError(400, 'COMPILER_UNAVAILABLE', msg('err.compilerMissing', { compiler: validated.compiler }));
       }
       const prepared = buildPrepared({
+        ownerId: req.user!.id,
+        projectId: project.id,
         files: validated.files.map,
         entry: validated.files.entry,
         compiler: validated.compiler,
@@ -251,10 +438,14 @@ async function main(): Promise<void> {
         limits: validated.limits,
         locale: req.locale,
       });
-      const { runId } = startRun(prepared);
+      const started = startRun(prepared);
+      if (!started) throw new ApiError(429, 'USER_BUSY', msg('err.userBusyRun'));
       audit({
         event: 'run.start',
-        runId,
+        runId: started.runId,
+        userId: req.user!.id,
+        username: req.user!.username,
+        projectId: project.id,
         entry: validated.files.entry,
         compiler: validated.compiler,
         std: validated.std,
@@ -262,7 +453,7 @@ async function main(): Promise<void> {
         flags: validated.extraFlags,
         sourceBytes: validated.files.sourceBytes,
       });
-      res.status(202).json({ runId, wsPath: `/ws/run/${runId}` });
+      res.status(202).json({ runId: started.runId, wsPath: `/ws/run/${started.runId}` });
     } catch (error) {
       next(error);
     }
@@ -270,12 +461,14 @@ async function main(): Promise<void> {
 
   app.get('/api/run/:id', (req, res, next) => {
     try {
+      const project = projectFor(req);
       const session = getRunSession(req.params.id);
       if (session) {
+        if (session.ownerId !== req.user!.id) throw new ApiError(404, 'RUN_NOT_FOUND', msg('err.runNotFound'));
         res.json({ runId: session.id, done: session.done, result: session.result ?? null });
         return;
       }
-      const stored = getRun(req.params.id);
+      const stored = getRun(project.id, req.params.id);
       if (!stored) throw new ApiError(404, 'RUN_NOT_FOUND', msg('err.runNotFound'));
       res.json({ runId: stored.id, done: true, result: stored });
     } catch (error) {
@@ -285,8 +478,9 @@ async function main(): Promise<void> {
 
   app.get('/api/runs', (req, res, next) => {
     try {
+      const project = projectFor(req);
       const limit = Number(req.query.limit ?? 40);
-      res.json({ runs: listRuns(Number.isFinite(limit) ? limit : 40) });
+      res.json({ runs: listRuns(project.id, Number.isFinite(limit) ? limit : 40) });
     } catch (error) {
       next(error);
     }
@@ -294,7 +488,8 @@ async function main(): Promise<void> {
 
   app.get('/api/runs/:id', (req, res, next) => {
     try {
-      const run = getRun(req.params.id);
+      const project = projectFor(req);
+      const run = getRun(project.id, req.params.id);
       if (!run) throw new ApiError(404, 'RUN_NOT_FOUND', msg('err.runNotFound'));
       res.json({ run });
     } catch (error) {
@@ -304,11 +499,13 @@ async function main(): Promise<void> {
 
   app.post('/api/runs/:id/restore', (req, res, next) => {
     try {
-      const run = getRun(req.params.id);
+      const project = projectFor(req);
+      // The owner check is the project-scoped lookup, before any file write.
+      const run = getRun(project.id, req.params.id);
       if (!run) throw new ApiError(404, 'RUN_NOT_FOUND', msg('err.runNotFound'));
       const validated = validateFiles(run.files, run.source.entry);
-      replaceFiles(validated.files, run.source);
-      res.json(projectState(req.locale));
+      replaceFiles(project.id, validated.files, run.source);
+      res.json(projectState(projectFor(req), req.locale));
     } catch (error) {
       next(error);
     }
@@ -316,11 +513,15 @@ async function main(): Promise<void> {
 
   app.post('/api/debug/start', asyncRoute(async (req, res) => {
     enforceRate(req);
+    enforceUserRate(req);
+    const project = projectFor(req);
     const validated = validateDebugStart(req.body);
     if (!capabilities?.compilers.some((item) => item.id === validated.compiler && item.available)) {
       throw new ApiError(400, 'COMPILER_UNAVAILABLE', msg('err.compilerMissing', { compiler: validated.compiler }));
     }
     const outcome = await startDebugSession({
+      ownerId: req.user!.id,
+      projectId: project.id,
       files: validated.files.map,
       fileList: validated.files.files,
       entry: validated.files.entry,
@@ -333,19 +534,29 @@ async function main(): Promise<void> {
       res.json({ status: 'CE', diagnostics: outcome.diagnostics, compileOutput: outcome.compileOutput });
       return;
     }
-    audit({ event: 'debug.start', sessionId: outcome.response.sessionId, entry: validated.files.entry });
+    audit({
+      event: 'debug.start',
+      sessionId: outcome.response.sessionId,
+      userId: req.user!.id,
+      username: req.user!.username,
+      projectId: project.id,
+      entry: validated.files.entry,
+    });
     res.status(201).json(outcome.response);
   }));
 
-  // F-07: session ids are attach credentials; only expose them to loopback.
+  // Only the current user's sessions; loopback is no longer an authorization rule.
   app.get('/api/debug', (req, res) => {
-    res.json({ sessions: isLoopback(req) ? listDebugSessions() : [] });
+    res.json({ sessions: listDebugSessions(req.user!.id) });
   });
 
   app.post('/api/debug/:id/stop', asyncRoute(async (req, res) => {
-    const stopped = await stopDebugSession(String(req.params.id));
-    if (!stopped) throw new ApiError(404, 'SESSION_NOT_FOUND', msg('err.debugSessionNotFound'));
-    audit({ event: 'debug.stop', sessionId: String(req.params.id) });
+    const session = getDebugSession(String(req.params.id));
+    if (!session || session.ownerId !== req.user!.id) {
+      throw new ApiError(404, 'SESSION_NOT_FOUND', msg('err.debugSessionNotFound'));
+    }
+    await stopDebugSession(session.id);
+    audit({ event: 'debug.stop', sessionId: session.id, userId: req.user!.id });
     res.json({ ok: true });
   }));
 
@@ -405,10 +616,10 @@ async function main(): Promise<void> {
   const wss = new WebSocketServer({ noServer: true });
 
   server.on('upgrade', (req, socket, head) => {
-    // F-07: cross-origin pages must not attach to run/debug sessions.
     const originHeader = req.headers.origin;
     const origin = Array.isArray(originHeader) ? originHeader[0] : originHeader;
-    if (!originAllowed(origin, req.headers.host)) {
+    if (!wsOriginAllowed(origin, req.headers.host)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
     }
@@ -419,33 +630,59 @@ async function main(): Promise<void> {
       socket.destroy();
       return;
     }
+
+    // WebSocket upgrades bypass Express entirely: resolve the cookie session
+    // here, then enforce ownership before attaching (multi-user-auth.md §8.3).
+    const cookies = parseCookies(req.headers.cookie);
+    const token = cookies[config.auth.cookieName];
+    const authenticated = authenticateToken(token);
+    const tokenHash = token ? hashToken(token) : undefined;
+
     wss.handleUpgrade(req, socket, head, (ws) => {
+      (ws as WebSocket & { authTokenHash?: string }).authTokenHash = tokenHash;
+      if (!authenticated) {
+        ws.close(4401, 'authentication required');
+        return;
+      }
+      const authorize = authProbe(tokenHash);
       if (runMatch) {
         const session = getRunSession(runMatch[1]);
         if (!session) {
-          ws.close(4004, 'run not found');
+          ws.close(4404, 'run not found');
           return;
         }
-        attachRunSocket(session, ws);
+        if (session.ownerId !== authenticated.user.id) {
+          ws.close(4403, 'not the run owner');
+          return;
+        }
+        attachRunSocket(session, ws, authorize);
       } else if (debugMatch) {
         const session = getDebugSession(debugMatch[1]);
         if (!session) {
-          ws.close(4004, 'session not found');
+          ws.close(4404, 'session not found');
           return;
         }
-        session.attach(ws);
+        if (session.ownerId !== authenticated.user.id) {
+          ws.close(4403, 'not the session owner');
+          return;
+        }
+        session.attach(ws, authorize);
       }
     });
   });
 
   const heartbeat = setInterval(() => {
     for (const ws of wss.clients) {
-      const alive = (ws as WebSocket & { isAlive?: boolean }).isAlive;
-      if (alive === false) {
+      const tracked = ws as WebSocket & { isAlive?: boolean; authTokenHash?: string };
+      if (tracked.authTokenHash && authenticateTokenHash(tracked.authTokenHash) === null) {
+        ws.close(4401, 'authentication required');
+        continue;
+      }
+      if (tracked.isAlive === false) {
         ws.terminate();
         continue;
       }
-      (ws as WebSocket & { isAlive?: boolean }).isAlive = false;
+      tracked.isAlive = false;
       ws.ping();
     }
   }, 30_000);
@@ -477,6 +714,8 @@ async function main(): Promise<void> {
     shuttingDown = true;
     console.log(`[cpplab] shutting down (${signal})`);
     clearInterval(heartbeat);
+    clearInterval(rateSweeper);
+    clearInterval(sessionCleaner);
     for (const ws of wss.clients) ws.close(1001, 'server shutting down');
     await shutdownDebugSessions();
     await new Promise<void>((resolve) => server.close(() => resolve()));

@@ -1,23 +1,28 @@
+import { useEffect, useRef, useState } from 'react';
 import {
   Bug,
+  ChevronDown,
   CircleHelp,
   Cloud,
   CloudUpload,
   Code2,
   History,
+  KeyRound,
   Loader2,
+  LogOut,
   Play,
   Settings2,
   Square,
   Wand2,
 } from 'lucide-react';
 import type { DebugState } from '../debug/dapClient';
-import type { RunPhase } from '../../shared/types';
+import type { AuthUser, RunPhase } from '../../shared/types';
 import { t, useLocale } from '../i18n';
 
 type SaveState = 'saved' | 'saving' | 'dirty' | 'error';
 
 interface TopBarProps {
+  user: AuthUser;
   projectName: string;
   saveState: SaveState;
   runPhase: RunPhase | null;
@@ -31,6 +36,8 @@ interface TopBarProps {
   onOpenHistory: () => void;
   onOpenSettings: () => void;
   onOpenHelp: () => void;
+  onChangePassword: () => void;
+  onLogout: () => void;
 }
 
 function SaveIndicator({ state }: { state: SaveState }): JSX.Element {
@@ -65,9 +72,28 @@ function SaveIndicator({ state }: { state: SaveState }): JSX.Element {
 
 export function TopBar(props: TopBarProps): JSX.Element {
   useLocale();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const runBusy = props.runPhase === 'queued' || props.runPhase === 'compiling' || props.runPhase === 'running';
   const debugActive =
     props.debugState === 'starting' || props.debugState === 'running' || props.debugState === 'paused';
+  const initials = props.user.displayName.slice(0, 2).toUpperCase();
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointerDown = (event: PointerEvent): void => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) setMenuOpen(false);
+    };
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setMenuOpen(false);
+    };
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [menuOpen]);
 
   return (
     <header className="topbar">
@@ -135,7 +161,52 @@ export function TopBar(props: TopBarProps): JSX.Element {
           <CircleHelp size={18} />
         </button>
         <span className="topbar-divider" />
-        <span className="avatar" title={t('chrome.topbar.workspace')}>C++</span>
+        <div className="user-menu-anchor" ref={menuRef}>
+          <button
+            type="button"
+            className="user-button"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((value) => !value)}
+            title={t('auth.user.signedInAs', { name: props.user.displayName })}
+          >
+            <span className="avatar">{initials}</span>
+            <span className="user-button-name">{props.user.displayName}</span>
+            <ChevronDown size={13} />
+          </button>
+          {menuOpen && (
+            <div className="user-menu" role="menu" aria-label={t('auth.user.menu')}>
+              <div className="user-menu-head">
+                <strong>{props.user.displayName}</strong>
+                <span>
+                  @{props.user.username} · {props.user.role}
+                </span>
+              </div>
+              <button
+                type="button"
+                role="menuitem"
+                className="user-menu-item"
+                onClick={() => {
+                  setMenuOpen(false);
+                  props.onChangePassword();
+                }}
+              >
+                <KeyRound size={14} /> {t('auth.user.changePassword')}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="user-menu-item"
+                onClick={() => {
+                  setMenuOpen(false);
+                  props.onLogout();
+                }}
+              >
+                <LogOut size={14} /> {t('auth.user.logout')}
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </header>
   );

@@ -8,7 +8,8 @@
  *   3. the language switch in Settings flips the UI to Chinese and persists,
  *   4. the choice survives a reload and can be switched back.
  *
- * Requires a running backend: BASE_URL=http://127.0.0.1:3104 npm run i18n:ui
+ * Requires a running backend with a real account:
+ *   BASE_URL=http://127.0.0.1:3104 UI_USERNAME=alice UI_PASSWORD=... npm run i18n:ui
  * Requires Playwright's chromium (available in this environment); the script
  * exits with a clear message when it is not installed.
  */
@@ -24,6 +25,8 @@ try {
 
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:3104';
 const SHOTS = process.env.SHOT_DIR || '/tmp';
+const USERNAME = process.env.UI_USERNAME || process.env.I18N_USERNAME || 'alice';
+const PASSWORD = process.env.UI_PASSWORD || process.env.I18N_PASSWORD || '';
 const CJK = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/;
 
 const failures = [];
@@ -83,13 +86,27 @@ async function openSettings(page) {
   const consoleErrors = [];
   page.on('pageerror', (error) => consoleErrors.push(`pageerror: ${error.message}`));
   page.on('console', (message) => {
-    if (message.type() === 'error') consoleErrors.push(`console: ${message.text()}`);
+    // The signed-out bootstrap intentionally probes /api/auth/me and gets a
+    // 401; Chromium logs that failed resource request. It is not a UI error.
+    if (message.type() === 'error' && !/401 \(Unauthorized\)/.test(message.text())) {
+      consoleErrors.push(`console: ${message.text()}`);
+    }
   });
 
   try {
     console.log(`1. English page (browser locale en-US) — ${BASE}`);
     await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await page.waitForSelector('.view-lines', { timeout: 60000 });
+    await page.waitForSelector('input[name="username"], .view-lines', { timeout: 60000 });
+    if (await page.locator('input[name="username"]').count()) {
+      if (!PASSWORD) {
+        throw new Error('the API is protected; set UI_USERNAME and UI_PASSWORD to run this check');
+      }
+      await page.fill('input[name="username"]', USERNAME);
+      await page.fill('input[name="password"]', PASSWORD);
+      await page.screenshot({ path: `${SHOTS}/i18n-login.png` });
+      await page.click('button[type="submit"]');
+      await page.waitForSelector('.view-lines', { timeout: 60000 });
+    }
     await page.waitForTimeout(800);
 
     check('html lang is en', (await page.getAttribute('html', 'lang')) === 'en');

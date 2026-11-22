@@ -21,10 +21,14 @@ import {
 } from '../sandbox/nsjail.js';
 import { createDebugSessionRow, endDebugSession, newId, touchDebugSession } from '../db.js';
 import { audit } from '../util/audit.js';
+import { userDebugSlots } from '../util/userQuota.js';
 
 const debugSemaphore = new Semaphore(config.limits.maxDebugSessions);
 
 export interface DebugStartInput {
+  /** Owner of the project this debug session belongs to. */
+  ownerId: string;
+  projectId: string;
   files: Record<string, string>;
   fileList: Array<{ path: string; content: string }>;
   entry: string;
@@ -98,25 +102,32 @@ class DebugSession {
   private ended = false;
   private cleaned = false;
   private lastDbTouch = 0;
+  /** Re-validates the cookie session; set by attach(). */
+  private authorize: () => boolean = () => true;
   private programOutputBytes = 0;
   private consoleMessages = 0;
   private outputLimitHit = false;
   private readonly parser = new DapFrameParser();
   private stderrBuffer = '';
   private readonly release: () => void;
+  private readonly releaseUserSlot: () => void;
   private readonly handle: DebugSandboxHandle;
   private readonly onExit: () => void;
 
   constructor(
     readonly id: string,
     readonly workdir: string,
+    readonly ownerId: string,
+    readonly projectId: string,
     /** Messages shown to this session's client, in its UI language. */
     readonly locale: Locale,
     handle: DebugSandboxHandle,
     release: () => void,
+    releaseUserSlot: () => void,
   ) {
     this.handle = handle;
     this.release = release;
+    this.releaseUserSlot = releaseUserSlot;
     this.idleTimer = setTimeout(() => this.expire(this.say('dbg.idleTimeout')), config.limits.debugIdleTimeoutMs);
     this.hardTimer = setTimeout(() => this.expire(this.say('dbg.hardTimeout')), config.limits.debugHardTimeoutMs);
     this.idleTimer.unref();
@@ -128,23 +139,25 @@ class DebugSession {
     handle.child.once('close', this.onExit);
     handle.child.once('error', this.onExit);
 
-    createDebugSessionRow(this.id, handle.child.pid ?? null);
+    createDebugSessionRow(this.projectId, this.id, handle.child.pid ?? null);
   }
 
   say(key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]): string {
     return translate(this.locale, key, params);
   }
 
-  attach(socket: WebSocket): void {
+  attach(socket: WebSocket, authorize: () => boolean = () => true): void {
     if (this.ended) {
       socket.close(4001, 'session ended');
       return;
     }
+    this.authorize = authorize;
     if (this.socket && this.socket.readyState === 1) {
       socket.close(4009, 'session already attached');
       return;
     }
     this.socket = socket;
+    if (!this.stillAuthorized()) return;
     socket.send(
       JSON.stringify({
         type: 'ide-event',
@@ -154,6 +167,7 @@ class DebugSession {
     );
     socket.on('message', (data, isBinary) => {
       if (isBinary) return;
+      if (!this.stillAuthorized()) return;
       this.touch();
       const text = data.toString();
       if (text.length > 8 * 1024 * 1024) {
@@ -176,6 +190,18 @@ class DebugSession {
     socket.on('error', () => {
       void this.terminate(this.say('dbg.clientError'));
     });
+  }
+
+  /**
+   * A debug socket may outlive the cookie session (sign-out, admin disable,
+   * password reset). Re-check before forwarding anything; 4401 tells the client
+   * to return to the login screen instead of reconnecting.
+   */
+  private stillAuthorized(): boolean {
+    if (this.authorize()) return true;
+    if (this.socket && this.socket.readyState === 1) this.socket.close(4401, 'authentication required');
+    void this.terminate('authentication required');
+    return false;
   }
 
   private touch(): void {
@@ -236,6 +262,7 @@ class DebugSession {
         }
       }
       if (this.socket && this.socket.readyState === 1) {
+        if (!this.stillAuthorized()) return;
         this.socket.send(JSON.stringify(message));
       }
     }
@@ -262,6 +289,7 @@ class DebugSession {
     if (this.consoleMessages >= 4000) return;
     this.consoleMessages += 1;
     if (this.socket && this.socket.readyState === 1) {
+      if (!this.stillAuthorized()) return;
       this.socket.send(JSON.stringify({ type: 'ide-log', level: 'info', message: text }));
     }
   }
@@ -270,8 +298,10 @@ class DebugSession {
     if (this.ended) return;
     this.sendConsole(this.say('dbg.adapterExited'));
     if (this.socket && this.socket.readyState === 1) {
-      this.socket.send(JSON.stringify({ seq: 0, type: 'event', event: 'terminated', body: {} }));
-      this.socket.close(1000, 'debug adapter exited');
+      if (this.stillAuthorized()) {
+        this.socket.send(JSON.stringify({ seq: 0, type: 'event', event: 'terminated', body: {} }));
+        this.socket.close(1000, 'debug adapter exited');
+      }
     }
     void this.cleanup();
   }
@@ -314,6 +344,7 @@ class DebugSession {
       // Ignore.
     }
     sessions.delete(this.id);
+    this.releaseUserSlot();
     this.release();
   }
 
@@ -349,8 +380,13 @@ export async function startDebugSession(input: DebugStartInput): Promise<DebugSt
     throw new ApiError(503, 'DEBUGGER_UNAVAILABLE', msg('err.debuggerMissing'));
   }
   const release = await debugSemaphore.acquire();
+  let releaseUserSlot: (() => void) | undefined;
   let workdir: string | undefined;
   try {
+    releaseUserSlot = userDebugSlots.tryAcquire(input.ownerId) ?? undefined;
+    if (!releaseUserSlot) {
+      throw new ApiError(429, 'DEBUG_BUSY', msg('err.debugBusy'));
+    }
     const releaseCompile = await compileSemaphore.acquire();
     let compile: Awaited<ReturnType<typeof compileWorkspace>>;
     try {
@@ -370,13 +406,23 @@ export async function startDebugSession(input: DebugStartInput): Promise<DebugSt
     workdir = compile.workdir;
     if (!compile.ok) {
       cleanupWorkdir(compile.workdir);
+      releaseUserSlot();
       release();
       return { ok: false, diagnostics: compile.diagnostics, compileOutput: compile.compileOutput };
     }
 
     const handle = startDebugSandbox(compile.workdir, withInit([config.tools.lldbDap]));
     const id = newId();
-    const session = new DebugSession(id, compile.workdir, input.locale, handle, release);
+    const session = new DebugSession(
+      id,
+      compile.workdir,
+      input.ownerId,
+      input.projectId,
+      input.locale,
+      handle,
+      release,
+      releaseUserSlot,
+    );
     sessions.set(id, session);
     return {
       ok: true,
@@ -390,6 +436,7 @@ export async function startDebugSession(input: DebugStartInput): Promise<DebugSt
       },
     };
   } catch (error) {
+    releaseUserSlot?.();
     release();
     if (workdir) cleanupWorkdir(workdir);
     if (error instanceof SandboxUnavailableError || error instanceof ApiError) throw error;
@@ -408,8 +455,10 @@ export async function stopDebugSession(id: string): Promise<boolean> {
   return true;
 }
 
-export function listDebugSessions(): DebugSessionSummary[] {
-  return [...sessions.values()].map((session) => session.summary());
+export function listDebugSessions(ownerId: string): DebugSessionSummary[] {
+  return [...sessions.values()]
+    .filter((session) => session.ownerId === ownerId)
+    .map((session) => session.summary());
 }
 
 export async function shutdownDebugSessions(): Promise<void> {

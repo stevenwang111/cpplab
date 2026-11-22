@@ -1,5 +1,6 @@
 import type {
   ApiErrorBody,
+  AuthState,
   Capabilities,
   DebugStartRequest,
   DebugStartResponse,
@@ -25,9 +26,22 @@ export class ApiClientError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+let unauthorizedHandler: (() => void) | null = null;
+
+/** Lets the application reset to the login screen on any expired session. */
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  unauthorizedHandler = handler;
+}
+
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  options?: { skipAuthHandler?: boolean },
+): Promise<T> {
   const response = await fetch(path, {
     ...init,
+    // Session auth relies on the cookie; never send it cross-origin.
+    credentials: 'same-origin',
     headers: {
       'Content-Type': 'application/json',
       // The server renders API errors, run phases and sandbox notes in this language.
@@ -42,6 +56,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // Fall through to the generic message.
     }
+    if (response.status === 401 && !options?.skipAuthHandler) unauthorizedHandler?.();
     throw new ApiClientError(
       response.status,
       body?.error.code ?? 'HTTP_ERROR',
@@ -54,6 +69,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<{ ok: boolean; capabilities: Capabilities }>('/api/health'),
+
+  me: () => request<AuthState>('/api/auth/me', undefined, { skipAuthHandler: true }),
+
+  login: (username: string, password: string) =>
+    request<AuthState>(
+      '/api/auth/login',
+      { method: 'POST', body: JSON.stringify({ username, password }) },
+      { skipAuthHandler: true },
+    ),
+
+  logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST', body: '{}' }),
+
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<AuthState>('/api/auth/password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
 
   project: () => request<ProjectState>('/api/project'),
 

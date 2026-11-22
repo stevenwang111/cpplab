@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Code2, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import type {
+  AuthUser,
   CompilerId,
   Diagnostic,
   OptId,
@@ -11,7 +12,7 @@ import type {
   RunResult,
   StdId,
 } from '../shared/types';
-import { api, wsUrl } from './api';
+import { api, ApiClientError, setUnauthorizedHandler, wsUrl } from './api';
 import { TopBar } from './components/TopBar';
 import { EditorToolbar } from './components/EditorToolbar';
 import { FileTabs } from './components/FileTabs';
@@ -25,6 +26,8 @@ import { FlagsPopover } from './components/FlagsPopover';
 import { FileMenu } from './components/FileMenu';
 import { ConfirmModal, HelpModal, NewFileModal } from './components/Modals';
 import { ToastStack } from './components/ToastStack';
+import { ChangePasswordDialog, ChangePasswordScreen, LoginScreen } from './components/AuthScreens';
+import { migrateLegacyStorage, userStorageKey } from './storage';
 import { useResizable } from './hooks/useResizable';
 import { useToast } from './hooks/useToast';
 import { getLocale, t, useLocale } from './i18n';
@@ -62,9 +65,20 @@ function saveLocal(key: string, value: unknown): void {
   }
 }
 
-export default function App(): JSX.Element {
+function Workspace({
+  user,
+  onLogout,
+  onUserChanged,
+  onAuthLost,
+}: {
+  user: AuthUser;
+  onLogout: () => void;
+  onUserChanged: (user: AuthUser) => void;
+  onAuthLost: () => void;
+}): JSX.Element {
   const locale = useLocale();
   const { toasts, push: pushToast, dismiss: dismissToast } = useToast();
+  const storageKey = (name: string): string => userStorageKey(user.id, name);
 
   const [projectState, setProjectState] = useState<ProjectState | null>(null);
   const [files, setFiles] = useState<Record<string, string>>({});
@@ -74,7 +88,7 @@ export default function App(): JSX.Element {
   const [compiler, setCompiler] = useState<CompilerId>('g++');
   const [std, setStd] = useState<StdId>('c++20');
   const [opt, setOpt] = useState<OptId>('-O0');
-  const [extraFlags, setExtraFlags] = useState<string[]>(() => readJson('cpplab.flags', []));
+  const [extraFlags, setExtraFlags] = useState<string[]>(() => readJson(storageKey('flags'), []));
   const [dirty, setDirty] = useState<Set<string>>(new Set());
   const [saveStatus, setSaveStatus] = useState<SaveState>('saved');
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
@@ -89,11 +103,11 @@ export default function App(): JSX.Element {
   const [bottomTab, setBottomTab] = useState<BottomTab>('output');
   const [bottomCollapsed, setBottomCollapsed] = useState(false);
   const [terminalLog, setTerminalLog] = useState<string[]>([]);
-  const [stdin, setStdin] = useState<string>(() => readString('cpplab.stdin'));
-  const [runLimits, setRunLimits] = useState<RunLimits>(() => readJson('cpplab.runLimits', { timeMs: 2000, memoryMb: 256 }));
+  const [stdin, setStdin] = useState<string>(() => readString(storageKey('stdin')));
+  const [runLimits, setRunLimits] = useState<RunLimits>(() => readJson(storageKey('runLimits'), { timeMs: 2000, memoryMb: 256 }));
 
   const [debugState, setDebugState] = useState<DebugState>('idle');
-  const [debugCollapsed, setDebugCollapsed] = useState<boolean>(() => readString('cpplab.debugCollapsed') === '1');
+  const [debugCollapsed, setDebugCollapsed] = useState<boolean>(() => readString(storageKey('debugCollapsed')) === '1');
   const [debugSession, setDebugSession] = useState<{ sessionId: string; program: string; cwd: string } | null>(null);
   const [debugThreadId, setDebugThreadId] = useState<number | null>(null);
   const [debugTab, setDebugTab] = useState<DebugTab>('stack');
@@ -104,7 +118,7 @@ export default function App(): JSX.Element {
   const [expandedVars, setExpandedVars] = useState<Set<number>>(new Set());
   const [loadingRefs, setLoadingRefs] = useState<Set<number>>(new Set());
   const [watches, setWatches] = useState<WatchExpression[]>(() =>
-    readJson<string[]>('cpplab.watches', []).map((expression) => ({ expression })),
+    readJson<string[]>(storageKey('watches'), []).map((expression) => ({ expression })),
   );
   const [watchInput, setWatchInput] = useState('');
   const [currentLine, setCurrentLine] = useState<{ file: string; line: number } | null>(null);
@@ -112,7 +126,7 @@ export default function App(): JSX.Element {
   const [debugExpression, setDebugExpression] = useState('');
   const [evaluationBusy, setEvaluationBusy] = useState(false);
   const [breakpoints, setBreakpoints] = useState<EditorBreakpoint[]>(() =>
-    readJson<EditorBreakpoint[]>('cpplab.breakpoints', [])
+    readJson<EditorBreakpoint[]>(storageKey('breakpoints'), [])
       .filter((item) => item && typeof item.file === 'string' && typeof item.line === 'number')
       .map((item) => ({ file: item.file, line: item.line, verified: false })),
   );
@@ -124,9 +138,10 @@ export default function App(): JSX.Element {
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const [newFileOpen, setNewFileOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [passwordOpen, setPasswordOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [editorSettings, setEditorSettings] = useState<EditorSettings>(() =>
-    readJson('cpplab.editor', { fontSize: 13, minimap: true, wordWrap: 'off' as const }),
+    readJson(storageKey('editor'), { fontSize: 13, minimap: true, wordWrap: 'off' as const }),
   );
   const [loading, setLoading] = useState(true);
   const [fatalError, setFatalError] = useState<string | null>(null);
@@ -160,8 +175,8 @@ export default function App(): JSX.Element {
   debugStateRef.current = debugState;
   cursorRef.current = cursor;
 
-  const debugResize = useResizable(320, { min: 280, max: 520, storageKey: 'cpplab.debugWidth' });
-  const bottomResize = useResizable(220, { min: 150, max: 520, storageKey: 'cpplab.bottomHeight', invert: true });
+  const debugResize = useResizable(320, { min: 280, max: 520, storageKey: storageKey('debugWidth') });
+  const bottomResize = useResizable(220, { min: 150, max: 520, storageKey: storageKey('bottomHeight'), invert: true });
 
   const capabilities = projectState?.capabilities ?? null;
   const compilers = capabilities?.compilers ?? [];
@@ -177,35 +192,40 @@ export default function App(): JSX.Element {
     !debugActive;
 
   useEffect(() => {
-    saveLocal('cpplab.stdin', stdin);
+    saveLocal(storageKey('stdin'), stdin);
   }, [stdin]);
   useEffect(() => {
-    saveLocal('cpplab.flags', extraFlags);
+    saveLocal(storageKey('flags'), extraFlags);
   }, [extraFlags]);
   useEffect(() => {
-    saveLocal('cpplab.runLimits', runLimits);
+    saveLocal(storageKey('runLimits'), runLimits);
   }, [runLimits]);
   useEffect(() => {
-    saveLocal('cpplab.editor', editorSettings);
+    saveLocal(storageKey('editor'), editorSettings);
   }, [editorSettings]);
   useEffect(() => {
-    saveLocal('cpplab.watches', watches.map((watch) => watch.expression));
+    saveLocal(storageKey('watches'), watches.map((watch) => watch.expression));
   }, [watches]);
   useEffect(() => {
     saveLocal(
-      'cpplab.breakpoints',
+      storageKey('breakpoints'),
       breakpoints.map(({ file, line }) => ({ file, line })),
     );
   }, [breakpoints]);
   useEffect(() => {
-    if (activeFile) saveLocal('cpplab.activeFile', activeFile);
+    if (activeFile) saveLocal(storageKey('activeFile'), activeFile);
   }, [activeFile]);
   useEffect(() => {
-    saveLocal('cpplab.debugCollapsed', debugCollapsed ? '1' : '0');
+    saveLocal(storageKey('debugCollapsed'), debugCollapsed ? '1' : '0');
   }, [debugCollapsed]);
   useEffect(() => {
     activeFileRef.current = activeFile;
   }, [activeFile]);
+
+  useEffect(() => {
+    setUnauthorizedHandler(onAuthLost);
+    return () => setUnauthorizedHandler(null);
+  }, [onAuthLost]);
 
   useEffect(() => {
     void bootstrap();
@@ -215,6 +235,20 @@ export default function App(): JSX.Element {
       dapRef.current?.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    // Leaving this workspace (sign-out, expiry, account switch) must stop all
+    // in-memory activity and timers before the next account renders.
+    const timers = saveTimersRef.current;
+    return () => {
+      for (const timer of timers.values()) window.clearTimeout(timer);
+      timers.clear();
+      runSocketRef.current?.close();
+      runSocketRef.current = null;
+      void dapRef.current?.disconnect();
+      dapRef.current = null;
+    };
   }, []);
 
   useEffect(() => {
@@ -239,7 +273,7 @@ export default function App(): JSX.Element {
     dirtyRef.current = new Set();
     setSaveStatus('saved');
 
-    const stored = readString('cpplab.activeFile');
+    const stored = readString(storageKey('activeFile'));
     const candidate = nextFiles[stored] ? stored : nextFiles[state.project.settings.entry] ? state.project.settings.entry : (Object.keys(nextFiles)[0] ?? '');
     setActiveFile(candidate);
     activeFileRef.current = candidate;
@@ -264,6 +298,10 @@ export default function App(): JSX.Element {
       applyProjectState(state);
       setFatalError(null);
     } catch (error) {
+      if (error instanceof ApiClientError && error.status === 401) {
+        onAuthLost();
+        return;
+      }
       setFatalError(error instanceof Error ? error.message : t('app.error.backendUnreachable'));
     } finally {
       setLoading(false);
@@ -525,8 +563,17 @@ export default function App(): JSX.Element {
       socket.onerror = () => {
         // The close handler runs the recovery path.
       };
-      socket.onclose = () => {
+      socket.onclose = (event) => {
         if (runSocketRef.current === socket) runSocketRef.current = null;
+        if (event.code === 4401) {
+          onAuthLost();
+          return;
+        }
+        if (event.code === 4403) {
+          pushToast('error', t('auth.ws.forbidden'));
+          setRunPhase(null);
+          return;
+        }
         if (!gotResult) void recoverRun(response.runId);
       };
     } catch (error) {
@@ -787,6 +834,7 @@ export default function App(): JSX.Element {
         appendDebug('error', message);
         pushToast('error', message);
       },
+      onUnauthorized: () => onAuthLost(),
     };
   }
 
@@ -1243,6 +1291,7 @@ export default function App(): JSX.Element {
   return (
     <div className="app">
       <TopBar
+        user={user}
         projectName={projectState.project.name}
         saveState={saveStatus}
         runPhase={runPhase}
@@ -1270,6 +1319,8 @@ export default function App(): JSX.Element {
           setFileMenuOpen(false);
           setHelpOpen(true);
         }}
+        onChangePassword={() => setPasswordOpen(true)}
+        onLogout={onLogout}
       />
 
       {!sandboxReady && (
@@ -1419,6 +1470,7 @@ export default function App(): JSX.Element {
       </div>
 
       <StatusBar
+        projectName={projectState.project.name}
         activeFile={activeFile}
         cursor={cursor}
         compiler={compiler}
@@ -1501,7 +1553,131 @@ export default function App(): JSX.Element {
       />
 
       <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
+
+      <ChangePasswordDialog
+        open={passwordOpen}
+        onClose={() => setPasswordOpen(false)}
+        onSuccess={(next) => {
+          onUserChanged(next);
+          pushToast('success', t('auth.password.changed'));
+        }}
+      />
+
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </div>
+  );
+}
+
+/**
+ * Authentication shell. It resolves the session before any workspace state is
+ * created, so per-account localStorage initializers run with the right user and
+ * an expired cookie never flashes someone else's workspace.
+ */
+export default function App(): JSX.Element {
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [notice, setNotice] = useState<string | undefined>(undefined);
+  const [loading, setLoading] = useState(true);
+  const [fatalError, setFatalError] = useState<string | null>(null);
+
+  const onAuthLost = useCallback(() => {
+    setUser(null);
+    setNotice(t('auth.notice.sessionExpired'));
+  }, []);
+
+  const loadAuth = useCallback(async () => {
+    setLoading(true);
+    try {
+      const state = await api.me();
+      migrateLegacyStorage(state.user.id);
+      setUser(state.user);
+      setFatalError(null);
+    } catch (error) {
+      if (error instanceof ApiClientError && error.status === 401) {
+        setUser(null);
+        setFatalError(null);
+      } else {
+        setFatalError(error instanceof Error ? error.message : t('app.error.backendUnreachable'));
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadAuth();
+  }, [loadAuth]);
+
+  async function handleLogout(): Promise<void> {
+    try {
+      await api.logout();
+    } catch {
+      // The session may already be gone; still return to the login screen.
+    }
+    setUser(null);
+    setNotice(t('auth.notice.loggedOut'));
+  }
+
+  if (loading) {
+    return (
+      <div className="boot-screen">
+        <div className="boot-mark">
+          <Code2 size={30} />
+        </div>
+        <h1>CppLab</h1>
+        <p>{t('app.boot.connecting')}</p>
+        <Loader2 size={20} className="spin" />
+      </div>
+    );
+  }
+
+  if (fatalError) {
+    return (
+      <div className="boot-screen">
+        <div className="boot-mark error">
+          <AlertTriangle size={28} />
+        </div>
+        <h1>{t('app.boot.loadFailed')}</h1>
+        <p>{fatalError}</p>
+        <button type="button" className="btn btn-primary" onClick={() => void loadAuth()}>
+          <RefreshCw size={15} /> {t('common.retry')}
+        </button>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <LoginScreen
+        notice={notice}
+        onSuccess={(next) => {
+          migrateLegacyStorage(next.id);
+          setNotice(undefined);
+          setUser(next);
+        }}
+      />
+    );
+  }
+
+  if (user.mustChangePassword) {
+    return (
+      <ChangePasswordScreen
+        user={user}
+        onSuccess={(next) => {
+          setUser(next);
+          setNotice(undefined);
+        }}
+        onLogout={() => void handleLogout()}
+      />
+    );
+  }
+
+  return (
+    <Workspace
+      key={user.id}
+      user={user}
+      onLogout={() => void handleLogout()}
+      onUserChanged={setUser}
+      onAuthLost={onAuthLost}
+    />
   );
 }

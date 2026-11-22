@@ -19,8 +19,12 @@ import { audit } from './util/audit.js';
 import { createHash } from 'node:crypto';
 
 import { compileSemaphore, runSemaphore } from './util/semaphores.js';
+import { userRunSlots } from './util/userQuota.js';
 
 export interface PreparedRun {
+  /** Owner of the project this run belongs to (authorization boundary). */
+  ownerId: string;
+  projectId: string;
   files: Record<string, string>;
   fileList: Array<{ path: string; content: string }>;
   entry: string;
@@ -39,10 +43,14 @@ export class RunSession {
   readonly listeners = new Set<(event: RunEvent) => void>();
   result?: RunResult;
   done = false;
+  private released = false;
 
   constructor(
     readonly id: string,
     readonly createdAt: number,
+    readonly ownerId: string,
+    readonly projectId: string,
+    private readonly releaseSlot: () => void,
   ) {}
 
   emit(event: RunEvent): void {
@@ -60,8 +68,15 @@ export class RunSession {
   finish(result: RunResult): void {
     this.result = result;
     this.done = true;
+    this.release();
     this.emit({ type: 'result', result });
     setTimeout(() => sessions.delete(this.id), 10 * 60 * 1000).unref();
+  }
+
+  private release(): void {
+    if (this.released) return;
+    this.released = true;
+    this.releaseSlot();
   }
 
   subscribe(listener: (event: RunEvent) => void): () => void {
@@ -80,9 +95,11 @@ export function getRunSession(id: string): RunSession | undefined {
   return sessions.get(id);
 }
 
-export function startRun(prepared: PreparedRun): { runId: string } {
+export function startRun(prepared: PreparedRun): { runId: string } | null {
+  const releaseSlot = userRunSlots.tryAcquire(prepared.ownerId);
+  if (!releaseSlot) return null;
   const id = newId();
-  const session = new RunSession(id, Date.now());
+  const session = new RunSession(id, Date.now(), prepared.ownerId, prepared.projectId, releaseSlot);
   sessions.set(id, session);
   void executeRun(session, prepared).catch((error) => {
     const message = errorText(error, prepared.locale);
@@ -90,7 +107,7 @@ export function startRun(prepared: PreparedRun): { runId: string } {
     session.emit({ type: 'error', message });
     session.finish(result);
     try {
-      recordRun({ kind: 'run', result, files: prepared.files, stdin: prepared.stdin });
+      recordRun({ projectId: prepared.projectId, kind: 'run', result, files: prepared.files, stdin: prepared.stdin });
     } catch {
       // Losing one history row is preferable to crashing the process.
     }
@@ -198,7 +215,7 @@ async function executeRun(session: RunSession, prepared: PreparedRun): Promise<v
 function finishRun(session: RunSession, result: RunResult, prepared: PreparedRun): void {
   session.finish(result);
   try {
-    recordRun({ kind: 'run', result, files: prepared.files, stdin: prepared.stdin });
+    recordRun({ projectId: prepared.projectId, kind: 'run', result, files: prepared.files, stdin: prepared.stdin });
   } catch {
     // History is best effort.
   }
@@ -247,17 +264,30 @@ function buildFailureResult(id: string, prepared: PreparedRun, status: RunStatus
   };
 }
 
-export function attachRunSocket(session: RunSession, socket: WebSocket): void {
-  for (const event of session.replay()) {
+export function attachRunSocket(
+  session: RunSession,
+  socket: WebSocket,
+  authorize: () => boolean = () => true,
+): void {
+  const send = (event: RunEvent): boolean => {
+    if (socket.readyState !== 1) return false;
+    // The session may have been revoked while the run kept executing.
+    if (!authorize()) {
+      socket.close(4401, 'authentication required');
+      return false;
+    }
     socket.send(JSON.stringify(event));
+    return true;
+  };
+  for (const event of session.replay()) {
+    if (!send(event)) return;
   }
   if (session.done) {
     socket.close(1000, 'run finished');
     return;
   }
   const unsubscribe = session.subscribe((event) => {
-    if (socket.readyState !== 1) return;
-    socket.send(JSON.stringify(event));
+    if (!send(event)) return;
     if (event.type === 'result') {
       // Let the last frame flush before closing.
       setTimeout(() => socket.close(1000, 'run finished'), 20);
@@ -268,6 +298,8 @@ export function attachRunSocket(session: RunSession, socket: WebSocket): void {
 }
 
 export function buildPrepared(input: {
+  ownerId: string;
+  projectId: string;
   files: Record<string, string>;
   entry: string;
   compiler: CompilerId;

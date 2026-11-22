@@ -57,6 +57,8 @@ export interface DapHandlers {
   onBreakpoints?: (file: string, breakpoints: DapBreakpoint[]) => void;
   onCapabilities: (capabilities: DapCapabilities) => void;
   onError: (message: string) => void;
+  /** Server-side session check failed (close codes 4401/4403). */
+  onUnauthorized?: () => void;
 }
 
 interface PendingRequest {
@@ -128,6 +130,16 @@ export class DapClient {
         pending.reject(new Error(t('debug.error.connectionClosed')));
       }
       this.pending.clear();
+      if (event.code === 4401 || event.code === 4403) {
+        // 4401: signed out; 4403: someone else's session. Do not reconnect.
+        if (!this.terminatedNotified) {
+          this.terminatedNotified = true;
+          this.setState('terminated');
+        }
+        if (event.code === 4401) this.handlers.onUnauthorized?.();
+        else this.handlers.onError(t('auth.ws.forbidden'));
+        return;
+      }
       if (!this.terminatedNotified) {
         this.terminatedNotified = true;
         this.setState('terminated');

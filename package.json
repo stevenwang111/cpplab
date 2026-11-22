@@ -13,7 +13,14 @@
     "i18n:ui": "node scripts/i18n-ui-check.cjs",
     "sandbox:setup": "bash scripts/setup-sandbox.sh",
     "test:api": "node scripts/smoke-test.mjs",
-    "test": "node scripts/smoke-test.mjs"
+    "test:unit": "node --import tsx --test tests/unit/*.test.ts",
+    "test": "node scripts/smoke-test.mjs",
+    "user:add": "tsx scripts/user-cli.mts add",
+    "user:list": "tsx scripts/user-cli.mts list",
+    "user:passwd": "tsx scripts/user-cli.mts passwd",
+    "user:disable": "tsx scripts/user-cli.mts disable",
+    "user:enable": "tsx scripts/user-cli.mts enable",
+    "user:role": "tsx scripts/user-cli.mts role"
   },
   "dependencies": {
     "express": "^4.21.2",

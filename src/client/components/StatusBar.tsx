@@ -5,6 +5,7 @@ import { formatDuration, formatMemory, statusClass, statusLabel } from '../utils
 import { t, useLocale } from '../i18n';
 
 interface StatusBarProps {
+  projectName: string;
   activeFile: string;
   cursor: { line: number; column: number };
   compiler: CompilerId;
@@ -31,7 +32,7 @@ export function StatusBar(props: StatusBarProps): JSX.Element {
     <footer className="statusbar">
       <div className="statusbar-left">
         <span className="status-item">
-          <GitBranch size={12} /> playground
+          <GitBranch size={12} /> {props.projectName}
         </span>
         <span className="status-item">{props.activeFile}</span>
         <span className="status-item">

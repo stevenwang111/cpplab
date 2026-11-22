@@ -107,6 +107,28 @@ const zhCN = {
   'err.bodyTooLarge': '请求体过大',
   'err.internal': '服务器内部错误',
 
+  // --- auth (multi-user) ---
+  'err.authRequired': '请先登录',
+  'err.invalidCredentials': '用户名或密码错误',
+  'err.forbidden': '没有执行该操作的权限',
+  'err.passwordChangeRequired': '请先修改初始密码',
+  'err.originRequired': '缺少 Origin 请求头，已拒绝该请求',
+  'err.originMismatch': '请求来源与站点不一致，已拒绝该请求',
+  'err.loginRateLimited': '登录尝试过于频繁，请稍后再试',
+  'err.projectMissing': '当前账号没有可用项目，请联系管理员',
+  'err.orphanProjects': '存在未归属的遗留项目，服务已暂停；请管理员先修正数据归属',
+  'err.userBusyRun': '你已有一个运行任务，请等待其结束',
+  'err.debugBusy': '你已有一个调试会话，请先停止它',
+  'err.usernameInvalid': '用户名需为 3-32 位字母、数字、下划线、点或短横线，并以字母或数字开头',
+  'err.usernameTaken': '该用户名已被使用',
+  'err.passwordTooShort': '密码至少需要 10 个字符',
+  'err.passwordTooLong': '密码不能超过 128 个字符',
+  'err.passwordUnchanged': '新密码不能与当前密码相同',
+  'err.currentPasswordWrong': '当前密码不正确',
+  'err.userNotFound': '用户不存在',
+  'err.cannotDisableSelf': '不能禁用当前登录的管理员账号',
+  'err.cannotDemoteSelf': '不能取消当前登录管理员的管理权限',
+
   // --- seed data (db.ts) ---
   'db.projectName': '我的 C++ 项目',
   'db.sampleComment': '在 main 中设置断点，观察 values 的变化。',
@@ -213,6 +235,29 @@ const en: Record<keyof typeof zhCN, string> = {
   'err.invalidJson': 'Malformed JSON in the request body',
   'err.bodyTooLarge': 'Request body is too large',
   'err.internal': 'Internal server error',
+
+  // --- auth (multi-user) ---
+  'err.authRequired': 'Please sign in first',
+  'err.invalidCredentials': 'Incorrect username or password',
+  'err.forbidden': 'You do not have permission to do this',
+  'err.passwordChangeRequired': 'Change the initial password first',
+  'err.originRequired': 'Missing Origin header; request rejected',
+  'err.originMismatch': 'Request origin does not match this site; request rejected',
+  'err.loginRateLimited': 'Too many login attempts; please try again shortly',
+  'err.projectMissing': 'This account has no project; contact the administrator',
+  'err.orphanProjects': 'Legacy projects have no owner; the service is paused until an administrator fixes ownership',
+  'err.userBusyRun': 'You already have a run in progress; wait for it to finish',
+  'err.debugBusy': 'You already have a debug session; stop it first',
+  'err.usernameInvalid':
+    'Username must be 3-32 letters, digits, underscores, dots or dashes, starting with a letter or digit',
+  'err.usernameTaken': 'That username is already taken',
+  'err.passwordTooShort': 'The password must be at least 10 characters',
+  'err.passwordTooLong': 'The password cannot exceed 128 characters',
+  'err.passwordUnchanged': 'The new password must differ from the current one',
+  'err.currentPasswordWrong': 'The current password is incorrect',
+  'err.userNotFound': 'User not found',
+  'err.cannotDisableSelf': 'You cannot disable the currently signed-in administrator',
+  'err.cannotDemoteSelf': 'You cannot remove your own administrator role',
 
   // --- seed data (db.ts) ---
   'db.projectName': 'My C++ Project',

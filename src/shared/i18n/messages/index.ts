@@ -7,6 +7,7 @@ import dialogs from './dialogs.js';
 import app from './app.js';
 import client from './client.js';
 import server from './server.js';
+import auth from './auth.js';
 
 /**
  * Slices are spread in source order. A key defined by two slices would be a
@@ -21,6 +22,7 @@ export const zhCNMessages = {
   ...app['zh-CN'],
   ...client['zh-CN'],
   ...server['zh-CN'],
+  ...auth['zh-CN'],
 };
 
 export const enMessages = {
@@ -32,6 +34,7 @@ export const enMessages = {
   ...app.en,
   ...client.en,
   ...server.en,
+  ...auth.en,
 };
 
 /** Every key that ships in the product. Each slice keeps zh-CN and en in lockstep. */
